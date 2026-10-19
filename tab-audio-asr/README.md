@@ -483,11 +483,11 @@ tab-audio-asr/
 ├── popup.html/.css/.js        # 界面：设置、开始/停止、文字稿、导出
 ├── content/subtitle.js        # 视频页浮窗文字稿（Shadow DOM，可拖动/缩放，按时间轴高亮）
 ├── lib/wav.js                 # 混音 / 降采样 / WAV 编码
-├── lib/vad.js                 # 能量法切句：批量版 + 流式版
+├── lib/vad.js                 # 能量法切句：批量版 + 流式版（含 peek/trimFront）
 ├── lib/silero.js              # Silero VAD 封装（分帧、state 回传、按段求概率）
 ├── lib/incremental.js         # 增量提交的纯逻辑（切句/去重/裁剪计划/碎片合并）
-├── lib/glossary.js            # 术语表解析 / 本地替换 / 纠错提示词 / 回复解析
-├── lib/hallucination.js       # 幻觉过滤（黑名单 + 语速 + 稀疏）
+├── lib/glossary.js            # 术语表解析 / 本地替换 / 纠错提示词 / 回复解析（默认空表）
+├── lib/hallucination.js       # 幻觉过滤（语速 + 稀疏 + 复读，无句子黑名单）
 ├── lib/audiofile.js           # OPFS 边录边写 WAV
 ├── lib/pcm-worklet.js          # AudioWorklet：实时把 PCM 送回来
 ├── vendor/                    # 打包进插件的运行时（共 15.9MB）
@@ -498,6 +498,7 @@ tab-audio-asr/
 ├── demo/test-page.html        # 自测页：10 秒测试音 + 语音合成朗读
 ├── examples/                  # 领域术语表示例（数据，不是内置规则）
 │   └── glossary-计算机网络.txt #  802.11 / MAC 帧 那一套，改成自己的即可
+├── 开发笔记.md                # 交接用：实测数据、踩过的坑、否掉的方案、参数依据（看代码看不出来的）
 ├── icons/                     # 16/32/48/128 图标
 ├── make_icons.py              # 图标生成（Pillow）
 └── tools/
@@ -648,5 +649,6 @@ $env:SILICONFLOW_API_KEY_FILE="C:\...\.siliconflow-key"
 ```
 
 关键在于**切点由文本标点决定，而不是由音频能量决定**——所以它永远不会把一句话从中间切断。这正好治我实测到的病：`定稿「本部。」` 比预览的 `本部分包括以下四个内容：` 还差。
+
 
 
