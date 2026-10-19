@@ -1,0 +1,29 @@
+# 本地密钥与联调产物，不要提交
+.siliconflow-key
+tab-audio-asr/tools/out/
+tab-audio-asr/tools/tone.wav
+tab-audio-asr/tools/*.wav
+
+# 实时回放测试用的 Node 依赖（onnxruntime-node，几十 MB）
+_node/
+node_modules/
+
+# 原始录音体积大（一节课 16MB），不进仓库。
+# 需要复现时用插件重新录一段，或手动 git add -f 加进来。
+音频数据/录音/*.wav
+*.wav
+
+# 临时与打包产物
+*.zip
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# 运行时环境（若有）
+.venv/
+__pycache__/
+
+# 参考项目与无关归档（不是本次成果；需要时从 zip 重新解压）
+LiveTranslate-main/
+dsh-plugin-conversation-archive*/

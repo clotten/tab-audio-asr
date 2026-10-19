@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>插件自测页 —— 网页音频转文字</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 40px 20px;
+        background: #0f1319;
+        color: #e6edf3;
+        font: 14px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      main { max-width: 720px; margin: 0 auto; }
+      h1 { font-size: 20px; margin: 0 0 6px; }
+      .sub { color: #8b98a9; font-size: 13px; margin-bottom: 26px; }
+      section {
+        background: #171d26;
+        border: 1px solid #262f3c;
+        border-radius: 12px;
+        padding: 16px 18px;
+        margin-bottom: 14px;
+      }
+      h2 { font-size: 14px; margin: 0 0 8px; }
+      p { margin: 0 0 10px; color: #a9b6c6; font-size: 13px; }
+      button {
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 14px;
+        border-radius: 8px;
+        border: 1px solid #33404f;
+        background: #1e2631;
+        color: #e6edf3;
+        cursor: pointer;
+        margin-right: 8px;
+      }
+      button:hover { background: #26303d; }
+      button.primary {
+        background: linear-gradient(180deg, #4b8ef7, #2f74e0);
+        border-color: #3b82f6;
+        font-weight: 600;
+      }
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 76px;
+        background: #0e131a;
+        border: 1px solid #262f3c;
+        border-radius: 8px;
+        color: #e6edf3;
+        padding: 10px;
+        font: inherit;
+        font-size: 13px;
+        margin-bottom: 10px;
+        resize: vertical;
+      }
+      label { font-size: 12px; color: #8b98a9; display: block; margin-bottom: 10px; }
+      select {
+        background: #0e131a;
+        color: #e6edf3;
+        border: 1px solid #262f3c;
+        border-radius: 7px;
+        padding: 6px 8px;
+        font: inherit;
+        font-size: 12px;
+        margin-left: 6px;
+      }
+      .status { font-size: 12.5px; color: #7ee2a8; min-height: 20px; margin-top: 10px; }
+      .status.warn { color: #ffd48a; }
+      ol { margin: 6px 0 0; padding-left: 22px; color: #a9b6c6; font-size: 13px; }
+      code {
+        background: #0e131a;
+        border: 1px solid #262f3c;
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-size: 12px;
+      }
+      .meter {
+        height: 6px;
+        border-radius: 3px;
+        background: #0e131a;
+        overflow: hidden;
+        margin-top: 10px;
+      }
+      .meter > i { display: block; height: 100%; width: 0; background: #3b82f6; transition: width .1s; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>自测页</h1>
+      <p class="sub">
+        这个页面不依赖任何外部网站，用来验证「捕获 → 编码 → 上传 → 识别」这条链路。建议顺序：先测音调，再测语音。
+      </p>
+
+      <section>
+        <h2>1. 音调测试（验证抓取和上传链路）</h2>
+        <p>
+          播放 10 秒 1kHz 音调。它一定能被标签页音频捕获，用来确认插件能拿到声音、能编码、能调通接口。
+          纯音调**本来就不该识别出文字**，只要插件显示「接口 200 / 已转写 1 段」且没有报错，链路就是通的。
+        </p>
+        <button class="primary" id="toneBtn">播放 10 秒测试音</button>
+        <button id="toneStopBtn">停</button>
+        <div class="meter"><i id="meter"></i></div>
+        <div class="status" id="toneStatus"></div>
+      </section>
+
+      <section>
+        <h2>2. 语音测试（验证识别效果）</h2>
+        <p>
+          用浏览器自带的语音合成朗读一段中文。注意：部分浏览器把语音合成的音频走在单独的通道上，
+          可能不被标签页捕获；如果这里识别不出文字，但音调测试正常，请改用真实视频测试。
+        </p>
+        <textarea id="speechText">大家好，这是一段用于测试语音识别的文字。今天的会议主要讨论三个问题：第一是网页视频的音频如何提取，第二是分段上传的时长如何选择，第三是识别结果的校对方式。</textarea>
+        <label>语音
+          <select id="voiceSelect"></select>
+        </label>
+        <button class="primary" id="speakBtn">朗读一次</button>
+        <button id="loopBtn">循环朗读（每 12 秒）</button>
+        <button id="speakStopBtn">停</button>
+        <div class="status" id="speakStatus"></div>
+      </section>
+
+      <section>
+        <h2>3. 真实场景</h2>
+        <ol>
+          <li>打开任意在线视频（B 站 / YouTube / 播客网页 / 网课平台），确保能听到声音。</li>
+          <li>点插件图标 → 「开始转录」，第一次需要填 API Key。</li>
+          <li>等第一个分段（默认 20 秒，可在设置里改小到 10 秒，更快看到结果）；页面底部会同时出现悬浮字幕层。</li>
+          <li>文字稿会边录边出现；停止后还能继续导出 TXT / SRT。</li>
+        </ol>
+        <p style="margin-top: 10px">
+          小技巧：先播着视频再点开始，避免开头几句被截断。录的时候**不要切到别的标签页把声音静音**——
+          标签页自己静音了，捕获到的也是静音。
+        </p>
+      </section>
+    </main>
+
+    <script>
+      /* ---------------- 音调测试 ---------------- */
+      let audioCtx = null;
+      let osc = null;
+      let toneTimer = null;
+
+      const toneStatus = document.getElementById('toneStatus');
+      const meter = document.getElementById('meter');
+
+      function setToneStatus(text, warn) {
+        toneStatus.textContent = text || '';
+        toneStatus.className = 'status' + (warn ? ' warn' : '');
+      }
+
+      document.getElementById('toneBtn').addEventListener('click', async () => {
+        stopTone();
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        await audioCtx.resume();
+
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0.18;
+        gain.connect(audioCtx.destination);
+
+        osc = audioCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = 1000;
+        osc.connect(gain);
+        osc.start();
+
+        const endAt = performance.now() + 10000;
+        setToneStatus('正在播放 1kHz 音调，10 秒后自动停止…');
+
+        toneTimer = setInterval(() => {
+          const left = endAt - performance.now();
+          meter.style.width = Math.max(0, Math.min(100, (left / 10000) * 100)) + '%';
+          if (left <= 0) {
+            stopTone();
+            setToneStatus('音调播放结束。');
+          }
+        }, 100);
+      });
+
+      document.getElementById('toneStopBtn').addEventListener('click', () => {
+        stopTone();
+        setToneStatus('已停止。');
+      });
+
+      function stopTone() {
+        clearInterval(toneTimer);
+        toneTimer = null;
+        meter.style.width = '0%';
+        if (osc) {
+          try { osc.stop(); osc.disconnect(); } catch {}
+          osc = null;
+        }
+        if (audioCtx) {
+          audioCtx.close().catch(() => {});
+          audioCtx = null;
+        }
+      }
+
+      /* ---------------- 语音测试 ---------------- */
+      const speakStatus = document.getElementById('speakStatus');
+      const voiceSelect = document.getElementById('voiceSelect');
+      const speechText = document.getElementById('speechText');
+      let loopTimer = null;
+
+      function setSpeakStatus(text, warn) {
+        speakStatus.textContent = text || '';
+        speakStatus.className = 'status' + (warn ? ' warn' : '');
+      }
+
+      function loadVoices() {
+        const voices = (window.speechSynthesis?.getVoices?.() || []).filter((v) => /zh|cmn/i.test(v.lang));
+        voiceSelect.innerHTML = '';
+        if (!voices.length) {
+          const opt = document.createElement('option');
+          opt.textContent = '（未找到中文语音，可用系统默认）';
+          opt.value = '';
+          voiceSelect.appendChild(opt);
+          return;
+        }
+        for (const v of voices) {
+          const opt = document.createElement('option');
+          opt.value = v.name;
+          opt.textContent = `${v.name}（${v.lang}）`;
+          voiceSelect.appendChild(opt);
+        }
+      }
+
+      if (window.speechSynthesis) {
+        loadVoices();
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      } else {
+        setSpeakStatus('这个浏览器不支持 speechSynthesis，请用真实视频测试。', true);
+      }
+
+      function speakOnce() {
+        if (!window.speechSynthesis) return null;
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(speechText.value || '测试');
+        utter.lang = 'zh-CN';
+        utter.rate = 1;
+        const chosen = (window.speechSynthesis.getVoices() || []).find(
+          (v) => v.name === voiceSelect.value
+        );
+        if (chosen) utter.voice = chosen;
+        utter.onend = () => {
+          if (!loopTimer) setSpeakStatus('朗读结束。');
+        };
+        window.speechSynthesis.speak(utter);
+        return utter;
+      }
+
+      document.getElementById('speakBtn').addEventListener('click', () => {
+        stopLoop();
+        speakOnce();
+        setSpeakStatus('正在朗读一次…');
+      });
+
+      document.getElementById('speakStopBtn').addEventListener('click', () => {
+        stopLoop();
+        window.speechSynthesis?.cancel();
+        setSpeakStatus('已停止。');
+      });
+
+      document.getElementById('loopBtn').addEventListener('click', () => {
+        stopLoop();
+        speakOnce();
+        setSpeakStatus('循环朗读中，每 12 秒一次（适合测试长录音）。');
+        loopTimer = setInterval(() => {
+          speakOnce();
+        }, 12000);
+      });
+
+      function stopLoop() {
+        clearInterval(loopTimer);
+        loopTimer = null;
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,806 @@
+﻿/**
+ * popup.js —— 界面层：只管显示和发指令，不碰音频。
+ * 采集/编码/请求都在 offscreen.js 里，所以关掉这个弹窗也不会中断转录。
+ */
+
+import { makeToneWav } from './lib/wav.js';
+import { GLOSSARY_FORMAT_HINT } from './lib/glossary.js';
+import { readAudioFile, removeAudioFile } from './lib/audiofile.js';
+
+const DEFAULTS = {
+  apiKey: '',
+  model: 'Qwen/Qwen3-ASR-1.7B',
+  baseUrl: 'https://api.siliconflow.cn/v1',
+  segmentSeconds: 20,
+  maxChunkMs: 10000,
+  mutePlayback: false,
+  saveAudio: false,
+  sileroVad: true,
+  incrementalAsr: true,
+  correctModel: 'Qwen/Qwen2.5-7B-Instruct',
+  glossary: '',
+  prescanRate: 1.5,
+  subtitle: { enabled: true, fontSize: 15 }
+};
+
+const ACTIVE = new Set(['starting', 'recording', 'stopping']);
+
+const el = (id) => document.getElementById(id);
+
+let settings = { ...DEFAULTS };
+let session = null;
+let activeTab = null;
+let ticker = null;
+let busy = false;
+
+/* ------------------------------ 初始化 ------------------------------ */
+
+init();
+
+async function init() {
+  const stored = await chrome.storage.local.get(['asrSettings', 'asrSession']);
+  settings = { ...DEFAULTS, ...(stored.asrSettings || {}) };
+  session = stored.asrSession || null;
+
+  fillForm();
+  bindEvents();
+  await loadActiveTab();
+  await reconcileStaleSession();
+  render();
+
+  if (!settings.apiKey) el('settingsBox').open = true;
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes.asrSession) {
+      session = changes.asrSession.newValue || null;
+      render();
+    }
+    if (changes.asrSettings && !document.activeElement?.matches('input')) {
+      settings = { ...DEFAULTS, ...(changes.asrSettings.newValue || {}) };
+      fillForm();
+    }
+  });
+}
+
+function bindEvents() {
+  el('toggleBtn').addEventListener('click', () => (isActive() ? stop() : start()));
+  el('saveBtn').addEventListener('click', async () => {
+    const next = readForm();
+    if (!next.apiKey) return note('API Key 不能为空。', 'err');
+    const ok = await ensureHostPermission(next.baseUrl);
+    await saveSettings(next);
+    if (!ok) return note('设置已保存，但没拿到该接口域名的访问权限，请求会被浏览器拦。', 'err');
+    note('已保存。', 'ok');
+  });
+  el('testBtn').addEventListener('click', testApi);
+  el('vadTestBtn').addEventListener('click', vadSelftest);
+  el('copyBtn').addEventListener('click', copyAll);
+  el('txtBtn').addEventListener('click', exportTxt);
+  el('srtBtn').addEventListener('click', exportSrt);
+  el('resetBtn').addEventListener('click', resetSession);
+  el('correctBtn').addEventListener('click', correctAll);
+  el('refineBtn').addEventListener('click', refineAll);
+  el('saveAudioBtn').addEventListener('click', saveRecording);
+  el('prescanBtn').addEventListener('click', startPrescan);
+  el('demoBtn').addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('demo/test-page.html') });
+  });
+
+  // 字幕开关要"立刻"生效：内容脚本监听 storage 变化，这里直接存
+  el('subtitleEnabled').addEventListener('change', () => saveSettings(readForm()));
+  el('subtitleFontSize').addEventListener('change', () => saveSettings(readForm()));
+  el('mutePlayback').addEventListener('change', () => saveSettings(readForm()));
+  el('saveAudio').addEventListener('change', () => saveSettings(readForm()));
+  el('sileroVad').addEventListener('change', () => saveSettings(readForm()));
+  el('incrementalAsr').addEventListener('change', () => saveSettings(readForm()));
+  el('glossary').addEventListener('change', () => saveSettings(readForm()));
+  el('correctModel').addEventListener('change', () => saveSettings(readForm()));
+  el('prescanRate').addEventListener('change', () => saveSettings(readForm()));
+}
+
+/* ------------------------------ 校正全文 ------------------------------ */
+
+async function correctAll() {
+  if (!settings.apiKey) {
+    el('settingsBox').open = true;
+    return note('先填 API Key。', 'err');
+  }
+
+  const btn = el('correctBtn');
+  btn.disabled = true;
+  btn.textContent = '校正中…';
+  note('正在把整段稿子交给模型校正（每 40 句一次请求）…');
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: 'CORRECT_ALL' });
+  } catch (err) {
+    res = { ok: false, error: String(err?.message || err) };
+  }
+
+  btn.disabled = false;
+  btn.textContent = '校正全文';
+
+  if (!res?.ok) return note(`校正失败：${res?.error || '未知错误'}`, 'err');
+
+  note(`校正完成：检查 ${res.corrected} 句，改动 ${res.changed} 句（模型 ${res.model}）`, 'ok');
+  const { asrSession } = await chrome.storage.local.get('asrSession');
+  session = asrSession || session;
+  render();
+}
+
+/* ------------------------------ 离线精校 ------------------------------ */
+
+async function refineAll() {
+  const name = session?.diag?.audioFile;
+  if (!name) {
+    return note('这次没有保存音频，无法精校：开始录制前要勾「同时保存音频」。', 'err');
+  }
+  if (!settings.apiKey) {
+    el('settingsBox').open = true;
+    return note('先填 API Key。', 'err');
+  }
+
+  const btn = el('refineBtn');
+  btn.disabled = true;
+  btn.textContent = '精校中…';
+  note('离线精校中：按 20 秒上下文重新识别，再整段纠错。可能要几分钟，期间别关弹窗。');
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: 'REFINE' });
+  } catch (err) {
+    res = { ok: false, error: String(err?.message || err) };
+  }
+
+  btn.disabled = false;
+  btn.textContent = '离线精校';
+
+  if (!res?.ok) return note(`精校失败：${res?.error || '未知错误'}`, 'err');
+
+  const extra = res.correction
+    ? `，纠错又改动了 ${res.correction.changed} 句`
+    : res.correctionError
+      ? `，但纠错没跑完：${res.correctionError}`
+      : '';
+  note(`精校完成：${res.segments} 句${extra}`, 'ok');
+
+  const { asrSession } = await chrome.storage.local.get('asrSession');
+  session = asrSession || session;
+  render();
+}
+
+/* ------------------------------ 保存音频 ------------------------------ */
+
+async function saveRecording() {
+  const name = session?.diag?.audioFile;
+  if (!name) {
+    return note('这次没有保存音频：开始录制前要勾上「同时保存音频」。', 'err');
+  }
+
+  const btn = el('saveAudioBtn');
+  btn.disabled = true;
+  try {
+    const file = await readAudioFile(name);
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    note(`已开始下载 ${name}（${(file.size / 1048576).toFixed(1)} MB）`, 'ok');
+  } catch (err) {
+    note(`读取音频失败：${err?.message || err}`, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ------------------------------ 整段预扫 ------------------------------ */
+
+/**
+ * 预扫：让视频从 0 开始按倍速静音播放一遍，专门生成整段字幕。
+ * 注意这不是"偷偷提前"——视频是真的在快进，只是不放声音。
+ */
+async function startPrescan() {
+  const next = readForm();
+  if (!next.apiKey) {
+    el('settingsBox').open = true;
+    return note('请先填写 API Key。', 'err');
+  }
+  if (!activeTab?.id) return note('没有拿到当前标签页。', 'err');
+
+  const settingsForPrescan = { ...next, mutePlayback: true };
+  await saveSettings(settingsForPrescan);
+
+  busy = true;
+  el('toggleBtn').disabled = true;
+  el('prescanHint').textContent = '启动中…';
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({
+      type: 'START',
+      tabId: activeTab.id,
+      settings: settingsForPrescan
+    });
+  } catch (err) {
+    res = { ok: false, error: String(err?.message || err) };
+  }
+
+  busy = false;
+  el('toggleBtn').disabled = false;
+
+  if (!res?.ok) {
+    el('prescanHint').textContent = '';
+    return note(res?.error || '预扫启动失败', 'err');
+  }
+
+  // 交给页面里的脚本：拉回开头 + 设倍速 + 播放
+  await chrome.storage.local.set({
+    prescanCommand: { at: Date.now(), rate: settingsForPrescan.prescanRate }
+  });
+
+  el('prescanHint').textContent = `已按 ${settingsForPrescan.prescanRate}x 静音预扫`;
+  note('预扫已开始：视频会自动跳回开头并静音快进，播完自动停止。', 'ok');
+}
+
+/* ------------------------------ 当前标签页 ------------------------------ */
+
+async function loadActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  activeTab = tab || null;
+  if (!tab) {
+    el('tabTitle').textContent = '—';
+    el('tabMedia').textContent = '—';
+    return;
+  }
+
+  el('tabTitle').textContent = tab.title || tab.url || '未命名标签页';
+  el('tabTitle').title = tab.url || '';
+
+  const media = await scanMedia(tab.id);
+  renderMedia(tab, media);
+}
+
+async function scanMedia(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const videos = [...document.querySelectorAll('video')].map((v) => ({
+          paused: v.paused,
+          muted: v.muted,
+          time: Math.round(v.currentTime || 0)
+        }));
+        const audios = [...document.querySelectorAll('audio')];
+        return {
+          videos,
+          audios: audios.length,
+          audible: audios.some((a) => !a.paused)
+        };
+      }
+    });
+    return results?.[0]?.result ?? null;
+  } catch {
+    // chrome:// 等页面不允许注入脚本，正常现象
+    return null;
+  }
+}
+
+function renderMedia(tab, media) {
+  const parts = [];
+  if (media) {
+    if (media.videos?.length) {
+      const playing = media.videos.filter((v) => !v.paused).length;
+      parts.push(`video ×${media.videos.length}（播放中 ${playing}）`);
+    }
+    if (media.audios) parts.push(`audio ×${media.audios}`);
+    if (!parts.length) parts.push('未发现 video/audio');
+  } else {
+    parts.push('无法探测（页面受限）');
+  }
+
+  if (tab.audible) parts.push('标签页正在发声');
+  else if (!isActive()) parts.push('当前静音');
+
+  el('tabMedia').textContent = parts.join(' · ');
+
+  if (!isActive() && media && !media.videos?.some((v) => !v.paused) && !media.audible && !tab.audible) {
+    el('hint').textContent = '提示：这个标签页现在没在播放声音，先按播放再开始录制。';
+  } else if (!isActive()) {
+    el('hint').textContent = '录制期间插件会接管标签页声音并回放，你照常听即可。';
+  }
+}
+
+/* ------------------------------ 渲染 ------------------------------ */
+
+function isActive() {
+  return !!session && ACTIVE.has(session.status);
+}
+
+/**
+ * 存储里写着"录制中"，但后台页面其实已经没了（浏览器重启、页面被回收、
+ * 上次崩溃）——这种时候必须把状态改成已停止，否则 UI 会永远卡在计时中。
+ */
+async function reconcileStaleSession() {
+  if (!session || !ACTIVE.has(session.status)) return;
+
+  let alive = false;
+  try {
+    const res = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'PING' });
+    alive = !!res?.ok;
+  } catch {
+    alive = false;
+  }
+  if (alive) return;
+
+  session = {
+    ...session,
+    status: 'stopped',
+    stoppedAt: session.stoppedAt || Date.now(),
+    stopReason: '后台采集进程已退出'
+  };
+  await chrome.storage.local.set({ asrSession: session });
+}
+
+function render() {
+  const status = session?.status || 'idle';
+  const active = isActive();
+
+  const dot = el('statusDot');
+  const pill = el('statusPill');
+
+  const map = {
+    idle: ['空闲', ''],
+    starting: ['启动中', 'rec'],
+    recording: ['录制中', 'rec'],
+    stopping: ['收尾中', 'rec'],
+    stopped: ['已停止', 'ok'],
+    error: ['出错', 'err']
+  };
+  const [text, cls] = map[status] || map.idle;
+
+  dot.className = 'dot' + (cls === 'rec' ? ' rec' : cls === 'err' ? ' err' : '');
+  pill.className = 'pill' + (cls ? ' ' + cls : '');
+  pill.textContent = text;
+
+  const btn = el('toggleBtn');
+  btn.textContent = active ? '停止' : status === 'stopped' || status === 'error' ? '重新开始' : '开始转录';
+  btn.classList.toggle('stop', active);
+  btn.disabled = busy;
+
+  const audioName = session?.diag?.audioFile;
+  const saveBtn = el('saveAudioBtn');
+  saveBtn.disabled = !audioName;
+  saveBtn.title = audioName ? `下载 ${audioName}` : '这次没有保存音频（开始前要勾「同时保存音频」）';
+
+  const refineBtn = el('refineBtn');
+  refineBtn.disabled = !audioName || !!session?.diag?.refining;
+  refineBtn.title = audioName
+    ? '用保存的 WAV 按 20 秒上下文重新识别一遍（准得多，但耗时几分钟）'
+    : '需要先勾「同时保存音频」并录一次';
+
+  renderTimer();
+  renderProgress();
+  renderTranscript();
+
+  if (active) startTicker();
+  else stopTicker();
+}
+
+function renderTimer() {
+  const ms = elapsedOf(session);
+  el('timer').textContent = clock(ms);
+}
+
+function elapsedOf(s) {
+  if (!s?.startedAt) return 0;
+  const end = s.stoppedAt || Date.now();
+  return Math.max(0, end - s.startedAt);
+}
+
+function clock(ms) {
+  const total = Math.floor(ms / 1000);
+  const h = String(Math.floor(total / 3600)).padStart(2, '0');
+  const m = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const s = String(total % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+function renderProgress() {
+  const box = el('progress');
+  if (!session) {
+    box.className = 'meta';
+    box.textContent = '尚未开始';
+    return;
+  }
+
+  const bits = [];
+  bits.push(`已转写 ${session.done || 0} 句`);
+  if (session.pending) bits.push(`进行中 ${session.pending} 句`);
+  if (session.failed) bits.push(`失败 ${session.failed} 句`);
+  if (session.skipped) bits.push(`跳过 ${session.skipped} 段静音`);
+  if (session.diag?.mode) bits.push(session.diag.mode === 'pcm' ? '实时通路' : '分段通路');
+  if (session.diag?.vad) {
+    bits.push(
+      session.diag.vad === 'silero' ? 'Silero VAD' : session.diag.vad === 'loading' ? 'Silero 加载中…' : '能量 VAD'
+    );
+  }
+  if (session.diag?.vadError) bits.push(`VAD 回退：${session.diag.vadError}`);
+  if (session.diag?.silent) bits.push('⚠ 捕获静音（页面可能被暂停/静音）');
+
+  box.className = 'meta';
+  if (session.lastError) {
+    box.textContent = `${bits.join(' · ')} —— ${session.lastError}`;
+    box.classList.add('err');
+  } else {
+    box.textContent = bits.join(' · ');
+  }
+}
+
+function renderTranscript() {
+  const box = el('transcript');
+  const segs = session?.segments || [];
+
+  const chars = segs.reduce((n, s) => n + (s.text?.length || 0), 0);
+  el('counts').textContent = `${session?.done || 0} 句 / ${chars} 字`;
+
+  if (!segs.length) {
+    box.innerHTML = '<span class="empty">还没有内容，点上面的「开始转录」。</span>';
+    return;
+  }
+
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 12;
+  const frag = document.createDocumentFragment();
+
+  for (const seg of segs) {
+    // 纯静音/音乐块不显示，只在统计里算"跳过"
+    if (seg.status === 'skipped') continue;
+
+    const div = document.createElement('div');
+    div.className = 'seg';
+
+    if (seg.status === 'error') {
+      div.classList.add('err');
+      div.textContent = `[${clock(seg.startMs || 0)}] 第 ${seg.index + 1} 段失败：${seg.error}`;
+    } else if (seg.status === 'done') {
+      if (!seg.text) {
+        div.classList.add('pending');
+        div.textContent = `[${clock(seg.startMs || 0)}] （这一段没有识别出文字）`;
+      } else {
+        const t = document.createElement('span');
+        t.className = 't';
+        t.textContent = clock(seg.startMs || 0);
+        div.appendChild(t);
+        div.appendChild(document.createTextNode(seg.text));
+      }
+    } else {
+      div.classList.add('pending');
+      div.textContent = `[${clock(seg.startMs || 0)}] ${seg.status === 'uploading' ? '识别中…' : '排队中…'}`;
+    }
+    frag.appendChild(div);
+  }
+
+  box.replaceChildren(frag);
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function startTicker() {
+  if (ticker) return;
+  ticker = setInterval(() => {
+    renderTimer();
+    renderProgress();
+    if (!isActive()) stopTicker();
+  }, 500);
+}
+
+function stopTicker() {
+  clearInterval(ticker);
+  ticker = null;
+}
+
+/* ------------------------------ 开始 / 停止 ------------------------------ */
+
+async function start() {
+  const next = readForm();
+
+  if (!next.apiKey) {
+    el('settingsBox').open = true;
+    note('请先填写 API Key（硅基流动控制台 → API 密钥）。', 'err');
+    return;
+  }
+
+  // 权限请求必须在用户手势的有效期内，所以放在 saveSettings 的 await 之前
+  if (!(await ensureHostPermission(next.baseUrl))) {
+    note('没拿到该接口域名的访问权限，请求会被浏览器拦截。', 'err');
+    return;
+  }
+
+  await saveSettings(next);
+
+  if (!activeTab?.id) {
+    el('hint').textContent = '没有拿到当前标签页，请重新打开插件。';
+    return;
+  }
+
+  busy = true;
+  el('toggleBtn').disabled = true;
+  el('hint').textContent = '正在申请标签页音频…';
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({
+      type: 'START',
+      tabId: activeTab.id,
+      settings: next
+    });
+  } catch (err) {
+    res = { ok: false, error: String(err?.message || err) };
+  }
+
+  busy = false;
+
+  if (!res?.ok) {
+    el('hint').textContent = res?.error || '启动失败。';
+    const { asrSession } = await chrome.storage.local.get('asrSession');
+    session = asrSession || session;
+    render();
+    return;
+  }
+
+  el('hint').textContent = '正在录制并实时识别，可以关掉这个弹窗，转录不会中断。';
+}
+
+async function stop() {
+  await chrome.runtime.sendMessage({ type: 'STOP' }).catch(() => {});
+  const { asrSession } = await chrome.storage.local.get('asrSession');
+  session = asrSession || session;
+  render();
+
+  const canRefine = !!session?.diag?.audioFile && !session?.refined;
+  el('hint').textContent = canRefine
+    ? '已停止。点「离线精校」能按长上下文重跑一遍，比实时准很多。'
+    : session?.diag?.audioFile
+      ? '已停止。队列里剩下的片段还会继续上传完。'
+      : '已停止。下次勾上「同时保存音频」，就能用「离线精校」重跑。';
+}
+
+async function resetSession() {
+  const name = session?.diag?.audioFile;
+  await chrome.runtime.sendMessage({ type: 'RESET' }).catch(() => {});
+  if (name) await removeAudioFile(name).catch(() => {});
+  session = null;
+  render();
+  note('已清空。', 'ok');
+}
+
+/* ------------------------------ 表单 ------------------------------ */
+
+function fillForm() {
+  el('apiKey').value = settings.apiKey || '';
+  el('model').value = settings.model || DEFAULTS.model;
+  el('baseUrl').value = settings.baseUrl || DEFAULTS.baseUrl;
+  el('segmentSeconds').value = settings.segmentSeconds || DEFAULTS.segmentSeconds;
+  el('prescanRate').value = settings.prescanRate || DEFAULTS.prescanRate;
+  el('correctModel').value = settings.correctModel || DEFAULTS.correctModel;
+
+  // 术语表默认留空（通用）；这里只提示格式，示例在 examples/ 目录
+  el('glossary').value = settings.glossary || '';
+  el('glossary').placeholder = GLOSSARY_FORMAT_HINT;
+
+  const sub = { ...DEFAULTS.subtitle, ...(settings.subtitle || {}) };
+  el('subtitleEnabled').checked = sub.enabled !== false;
+  el('subtitleFontSize').value = sub.fontSize || DEFAULTS.subtitle.fontSize;
+  el('mutePlayback').checked = !!settings.mutePlayback;
+  el('saveAudio').checked = !!settings.saveAudio;
+  el('sileroVad').checked = settings.sileroVad !== false;
+  el('incrementalAsr').checked = settings.incrementalAsr !== false;
+}
+
+function readForm() {
+  const seg = Number(el('segmentSeconds').value) || DEFAULTS.segmentSeconds;
+  const fontSize = Number(el('subtitleFontSize').value) || DEFAULTS.subtitle.fontSize;
+  const rate = Number(el('prescanRate').value) || DEFAULTS.prescanRate;
+  return {
+    apiKey: el('apiKey').value.trim(),
+    model: el('model').value.trim() || DEFAULTS.model,
+    baseUrl: el('baseUrl').value.trim() || DEFAULTS.baseUrl,
+    segmentSeconds: Math.min(600, Math.max(10, Math.round(seg))),
+    maxChunkMs: settings.maxChunkMs || DEFAULTS.maxChunkMs,
+    mutePlayback: el('mutePlayback').checked,
+    saveAudio: el('saveAudio').checked,
+    sileroVad: el('sileroVad').checked,
+    incrementalAsr: el('incrementalAsr').checked,
+    correctModel: el('correctModel').value.trim() || DEFAULTS.correctModel,
+    glossary: el('glossary').value,
+    prescanRate: Math.min(2, Math.max(1, Number(rate.toFixed(1)))),
+    subtitle: {
+      ...(settings.subtitle || {}),
+      enabled: el('subtitleEnabled').checked,
+      fontSize: Math.min(48, Math.max(12, Math.round(fontSize)))
+    }
+  };
+}
+
+async function saveSettings(next) {
+  settings = { ...next };
+  await chrome.storage.local.set({ asrSettings: settings });
+}
+
+async function ensureHostPermission(baseUrl) {
+  try {
+    const origin = new URL(baseUrl).origin + '/*';
+    if (await chrome.permissions.contains({ origins: [origin] })) return true;
+    return await chrome.permissions.request({ origins: [origin] });
+  } catch {
+    return false;
+  }
+}
+
+/* ------------------------------ VAD 自检 ------------------------------ */
+
+async function vadSelftest() {
+  const btn = el('vadTestBtn');
+  btn.disabled = true;
+  btn.textContent = '自检中…';
+  note('正在自检 Silero VAD（加载运行时 → 取模型 → 建会话 → 跑一帧）…');
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: 'VAD_SELFTEST' });
+  } catch (err) {
+    res = { ok: false, error: String(err?.message || err), step: 'send' };
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'VAD 自检';
+
+  if (res?.ok) {
+    const mb = (res.modelBytes || 0) / 1048576;
+    return note(`VAD 正常：模型 ${mb.toFixed(1)}MB，单帧推理 ${res.inferMs}ms，概率 ${res.prob}`, 'ok');
+  }
+  note(`VAD 自检失败（卡在 ${res?.step || '?'}）：${res?.error || '未知错误'}`, 'err');
+}
+
+/* ------------------------------ 自测接口 ------------------------------ */
+
+async function testApi() {
+  const next = readForm();
+  if (!next.apiKey) return note('先填 API Key。', 'err');
+
+  if (!(await ensureHostPermission(next.baseUrl))) return note('缺少接口域名权限。', 'err');
+  await saveSettings(next);
+
+  note('正在请求接口…', '');
+
+  // 用 2 秒测试音走通整条链路：能返回 200 就说明 key / 模型名 / 网络都通
+  const wav = makeToneWav({ seconds: 2, freq: 440 });
+  const form = new FormData();
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'selftest.wav');
+  form.append('model', next.model);
+
+  const url = next.baseUrl.replace(/\/+$/, '') + '/audio/transcriptions';
+  const started = Date.now();
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${next.apiKey}` },
+      body: form
+    });
+    const body = await res.text();
+    const cost = Date.now() - started;
+
+    if (res.ok) {
+      note(`接口正常（${res.status}，${cost}ms）。返回：${body.slice(0, 120)}`, 'ok');
+    } else {
+      note(`接口返回 ${res.status}（${cost}ms）：${body.slice(0, 200)}`, 'err');
+    }
+  } catch (err) {
+    note(`请求失败：${err?.message || err}`, 'err');
+  }
+}
+
+/* ------------------------------ 导出 ------------------------------ */
+
+function collectSegments() {
+  return (session?.segments || []).filter((s) => s.status === 'done' && s.text);
+}
+
+function plainText({ withTime = false } = {}) {
+  return collectSegments()
+    .map((s) => (withTime ? `[${clock(s.startMs || 0)}] ${s.text}` : s.text))
+    .join('\n');
+}
+
+async function copyAll() {
+  const text = plainText();
+  if (!text) return note('还没有可复制的内容。', 'err');
+  try {
+    await navigator.clipboard.writeText(text);
+    note('已复制全文。', 'ok');
+  } catch {
+    note('复制失败，请用「导出 TXT」。', 'err');
+  }
+}
+
+function exportTxt() {
+  const text = plainText({ withTime: true });
+  if (!text) return note('还没有可导出的内容。', 'err');
+
+  const head = [
+    `标题：${session?.tabTitle || ''}`,
+    `模型：${session?.model || settings.model}`,
+    `时长：${clock(elapsedOf(session))}`,
+    `导出：${new Date().toLocaleString()}`,
+    ''
+  ].join('\n');
+
+  download(`${safeName(session?.tabTitle || '转录')}.txt`, head + text, 'text/plain;charset=utf-8');
+  note('已导出 TXT。', 'ok');
+}
+
+function exportSrt() {
+  const segs = collectSegments();
+  if (!segs.length) return note('还没有可导出的内容。', 'err');
+
+  const lines = [];
+  let n = 0;
+  segs.forEach((seg, i) => {
+    const start = Math.max(0, seg.startMs || 0);
+    const next = segs[i + 1];
+    let end = start + (seg.durationMs || 0);
+    if (!seg.durationMs) end = start + 3000;
+    if (next && next.startMs && end > next.startMs) end = next.startMs;
+    if (end <= start) end = start + 1000;
+
+    n += 1;
+    lines.push(String(n));
+    lines.push(`${srtTime(start)} --> ${srtTime(end)}`);
+    lines.push(seg.text);
+    lines.push('');
+  });
+
+  download(`${safeName(session?.tabTitle || '转录')}.srt`, lines.join('\n'), 'text/plain;charset=utf-8');
+  note('已导出 SRT（按分段计时，粒度约为每段秒数）。', 'ok');
+}
+
+function srtTime(ms) {
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  let rest = Math.max(0, Math.round(ms));
+  const h = Math.floor(rest / 3600000);
+  rest -= h * 3600000;
+  const m = Math.floor(rest / 60000);
+  rest -= m * 60000;
+  const s = Math.floor(rest / 1000);
+  rest -= s * 1000;
+  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(rest, 3)}`;
+}
+
+function download(filename, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function safeName(name) {
+  return String(name)
+    .replace(/[\\/:*?"<>|\r\n\t]/g, '_')
+    .slice(0, 60)
+    .trim() || '转录';
+}
+
+/* ------------------------------ 杂项 ------------------------------ */
+
+function note(text, kind = '') {
+  const box = el('settingsNote');
+  box.textContent = text;
+  box.className = 'note' + (kind ? ' ' + kind : '');
+  el('hint').textContent = text;
+}
+

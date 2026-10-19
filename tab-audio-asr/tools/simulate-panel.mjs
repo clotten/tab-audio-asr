@@ -1,0 +1,390 @@
+/**
+ * simulate-panel.mjs —— 用最小 DOM 桩把 content/subtitle.js 真跑一遍
+ *
+ * 面板跑在网页里，普通单测覆盖不到。这里手写一个够用的假 DOM
+ * （元素、DocumentFragment、classList、ShadowRoot、storage 事件），验证：
+ *   建面板 → 渲染句子行 → 时间戳 → 按视频时间高亮 → 开关隐藏/恢复 → 自动滚到底
+ *
+ * 运行：node tools/simulate-panel.mjs
+ */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import vm from 'node:vm';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, '..');
+
+let failed = 0;
+function check(name, cond, extra = '') {
+  if (cond) console.log(`  PASS  ${name}`);
+  else {
+    failed++;
+    console.log(`  FAIL  ${name}${extra ? '  → ' + extra : ''}`);
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ============================ 假 DOM ============================ */
+
+class FakeEl {
+  constructor(tag) {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.parentNode = null;
+    this.classes = new Set();
+    this.style = {
+      _p: {},
+      setProperty(k, v) {
+        this._p[k] = v;
+      },
+      getPropertyValue(k) {
+        return this._p[k];
+      }
+    };
+    this.listeners = {};
+    this.id = '';
+    this.title = '';
+    this._text = '';
+    this.scrollTop = 0;
+    this.clientHeight = 320;
+  }
+
+  get className() {
+    return [...this.classes].join(' ');
+  }
+  set className(v) {
+    this.classes = new Set(String(v).split(/\s+/).filter(Boolean));
+  }
+
+  get classList() {
+    const self = this;
+    return {
+      add: (...c) => c.forEach((x) => self.classes.add(x)),
+      remove: (...c) => c.forEach((x) => self.classes.delete(x)),
+      contains: (c) => self.classes.has(c),
+      toggle: (c, force) => {
+        const on = force === undefined ? !self.classes.has(c) : !!force;
+        if (on) self.classes.add(c);
+        else self.classes.delete(c);
+        return on;
+      }
+    };
+  }
+
+  get isConnected() {
+    return true;
+  }
+
+  get scrollHeight() {
+    return this.children.reduce((n, c) => n + (c.tagName === 'STYLE' ? 0 : 30), 0);
+  }
+
+  get textContent() {
+    if (this.children.length) return this.children.map((c) => c.textContent).join('');
+    return this._text;
+  }
+  set textContent(v) {
+    this.children = [];
+    this._text = String(v);
+  }
+
+  appendChild(node) {
+    // 假的 DocumentFragment：子节点摊平到父节点（真实 DOM 就是这个语义）
+    if (node.tagName === '#FRAGMENT') {
+      const kids = [...node.children];
+      node.children = [];
+      kids.forEach((c) => this.appendChild(c));
+      return node;
+    }
+    if (node.parentNode) node.parentNode.children = node.parentNode.children.filter((c) => c !== node);
+    node.parentNode = this;
+    this.children.push(node);
+    return node;
+  }
+  append(...nodes) {
+    nodes.forEach((n) => this.appendChild(n));
+  }
+  remove() {
+    if (!this.parentNode) return;
+    this.parentNode.children = this.parentNode.children.filter((c) => c !== this);
+    this.parentNode = null;
+  }
+  addEventListener(type, fn) {
+    (this.listeners[type] ||= []).push(fn);
+  }
+  removeEventListener(type, fn) {
+    if (!this.listeners[type]) return;
+    this.listeners[type] = this.listeners[type].filter((f) => f !== fn);
+  }
+  dispatch(type, event = {}) {
+    (this.listeners[type] || []).forEach((fn) => fn({ ...event, target: this }));
+  }
+  closest(sel) {
+    if (sel !== 'button') return null;
+    if (this.tagName === 'BUTTON') return this;
+    let p = this.parentNode;
+    while (p) {
+      if (p.tagName === 'BUTTON') return p;
+      p = p.parentNode;
+    }
+    return null;
+  }
+  getBoundingClientRect() {
+    return { left: 100, top: 100, width: 420, height: 320, right: 520, bottom: 420 };
+  }
+  attachShadow() {
+    const shadow = new FakeEl('#shadow-root');
+    this.shadowRoot = shadow;
+    return shadow;
+  }
+}
+
+/* ============================ 假视频（时间和录音一起走） ============================ */
+
+const videoStart = Date.now() - 1200;
+const fakeVideo = new FakeEl('video');
+
+let videoSeekedTo = null;
+let videoRate = 1;
+let videoPlaying = true;
+
+Object.defineProperties(fakeVideo, {
+  currentTime: {
+    get: () => (videoSeekedTo != null ? videoSeekedTo : (Date.now() - videoStart) / 1000),
+    set: (v) => {
+      videoSeekedTo = v;
+    }
+  },
+  duration: { get: () => 600 },
+  paused: { get: () => !videoPlaying },
+  playbackRate: {
+    get: () => videoRate,
+    set: (v) => {
+      videoRate = v;
+    }
+  }
+});
+
+fakeVideo.play = async () => {
+  videoPlaying = true;
+};
+
+const bodyEl = new FakeEl('body');
+const fakeDocument = {
+  createElement: (tag) => new FakeEl(tag),
+  createDocumentFragment: () => new FakeEl('#fragment'),
+  body: bodyEl,
+  documentElement: new FakeEl('html'),
+  fullscreenElement: null,
+  addEventListener() {},
+  querySelectorAll: (sel) => (sel === 'video' ? [fakeVideo] : [])
+};
+
+/* ============================ 假 chrome.storage ============================ */
+
+const store = new Map();
+const changeListeners = [];
+const runtimeMessages = [];
+const chromeStub = {
+  runtime: {
+    sendMessage: async (msg) => {
+      runtimeMessages.push(msg);
+      return null;
+    }
+  },
+  storage: {
+    local: {
+      get: async (keys) => {
+        const list = keys == null ? [...store.keys()] : Array.isArray(keys) ? keys : [keys];
+        const out = {};
+        for (const k of list) if (store.has(k)) out[k] = store.get(k);
+        return out;
+      },
+      set: async (obj) => {
+        const changes = {};
+        for (const [k, v] of Object.entries(obj)) {
+          changes[k] = { oldValue: store.get(k), newValue: v };
+          store.set(k, v);
+        }
+        for (const fn of changeListeners) fn(changes, 'local');
+      }
+    },
+    onChanged: { addListener: (fn) => changeListeners.push(fn) }
+  }
+};
+
+/* ============================ 初始会话（必须在跑脚本之前准备好） ============================ */
+
+const startedAt = Date.now() - 1200;
+store.set('asrSettings', { subtitle: { enabled: true, fontSize: 15 } });
+store.set('asrSession', {
+  status: 'recording',
+  startedAt,
+  stoppedAt: null,
+  model: 'Qwen/Qwen3-ASR-1.7B',
+  segments: [
+    // 两句时间区间故意重叠，用来验证"起点最靠后的那句优先"
+    { index: 0, startMs: 0, durationMs: 3000, status: 'done', text: '同学们好。' },
+    { index: 1, startMs: 800, durationMs: 2000, status: 'done', text: '今天我们学习 MAC 帧。' }
+  ]
+});
+
+/* ============================ 加载脚本 ============================ */
+
+class FakeResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+const ctx = vm.createContext({
+  chrome: chromeStub,
+  console,
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  document: fakeDocument,
+  ResizeObserver: FakeResizeObserver,
+  window: {
+    innerWidth: 1200,
+    innerHeight: 800,
+    addEventListener() {},
+    removeEventListener() {},
+    ResizeObserver: FakeResizeObserver
+  },
+  Date,
+  Math
+});
+
+vm.runInContext(readFileSync(join(root, 'content/subtitle.js'), 'utf8'), ctx, { filename: 'subtitle.js' });
+
+/* ============================ 演练 ============================ */
+
+function getPanel() {
+  const host = bodyEl.children.find((c) => c.id === '__video_asr_panel_host');
+  return host?.shadowRoot?.children.find((c) => c.classList.contains('panel'));
+}
+
+console.log('\n1) 面板是否建出来');
+const hostEl = bodyEl.children.find((c) => c.id === '__video_asr_panel_host');
+check('挂载了 host 节点', !!hostEl);
+check('建了 ShadowRoot', !!hostEl?.shadowRoot);
+check('建了 .panel', !!getPanel());
+check('初始不隐藏', getPanel() && !getPanel().classList.contains('hidden'));
+
+console.log('\n2) 渲染句子行（含时间戳）');
+await sleep(300);
+let body = getPanel().children.find((c) => c.classList.contains('body'));
+let rows = body.children.filter((c) => c.classList.contains('row'));
+check('渲染出 2 行', rows.length === 2, `实际 ${rows.length}`);
+check('第 1 行文本正确', rows[0]?.children[1]?.textContent === '同学们好。', rows[0]?.children[1]?.textContent);
+check(
+  '每行都有时间戳',
+  rows.every((r) => /^\d+:\d\d/.test(r.children[0]?.textContent || '')),
+  rows.map((r) => r.children[0]?.textContent).join(' / ')
+);
+check('末尾挂着"识别中"尾巴', body.children.some((c) => c.classList.contains('tail')));
+
+console.log('\n3) 按视频时间高亮');
+await sleep(400);
+const cur = rows.filter((r) => r.classList.contains('cur'));
+check('最多只有一行被高亮', cur.length <= 1, `实际 ${cur.length}`);
+check(
+  '高亮的是起点最靠后的那句',
+  cur.length === 1 && rows.indexOf(cur[0]) === rows.length - 1,
+  `高亮「${cur[0]?.children[1]?.textContent}」，共 ${rows.length} 行`
+);
+
+console.log('\n4) 关掉开关 → 隐藏');
+await chromeStub.storage.local.set({ asrSettings: { subtitle: { enabled: false, fontSize: 15 } } });
+await sleep(250);
+check('面板被隐藏', getPanel().classList.contains('hidden'), getPanel().className);
+
+console.log('\n5) 重新打开 → 恢复显示，并追加新句');
+await chromeStub.storage.local.set({ asrSettings: { subtitle: { enabled: true, fontSize: 15 } } });
+await sleep(200);
+check('面板重新显示', !getPanel().classList.contains('hidden'), getPanel().className);
+
+const sess = store.get('asrSession');
+sess.segments.push({ index: 2, startMs: 7000, durationMs: 2500, status: 'done', text: '802.11 有三种帧。' });
+await chromeStub.storage.local.set({ asrSession: { ...sess } });
+await sleep(300);
+
+body = getPanel().children.find((c) => c.classList.contains('body'));
+rows = body.children.filter((c) => c.classList.contains('row'));
+check('变成 3 行', rows.length === 3, `实际 ${rows.length}`);
+check(
+  '自动滚到了底部',
+  body.scrollTop >= body.scrollHeight - body.clientHeight - 1,
+  `${body.scrollTop}/${body.scrollHeight}/${body.clientHeight}`
+);
+
+const where = getPanel().children.find((c) => c.classList.contains('where'));
+check('底栏句数已更新', (where?.children[0]?.textContent || '').includes('3 句'), where?.children[0]?.textContent);
+
+console.log('\n6) 会话停止');
+sess.status = 'stopped';
+sess.stoppedAt = Date.now();
+await chromeStub.storage.local.set({ asrSession: { ...sess } });
+await sleep(250);
+const whereMode = getPanel().children.find((c) => c.classList.contains('where'))?.children[1]?.textContent || '';
+check('底栏显示已停止', whereMode.includes('已停止'), whereMode);
+check('还没到自动淡出时间', !getPanel().classList.contains('hidden'));
+
+console.log('\n7) 整段预扫：拉回开头 + 设倍速 + 不静音元素');
+await chromeStub.storage.local.set({ prescanCommand: { at: Date.now(), rate: 1.5 } });
+await sleep(200);
+check('倍速被设成 1.5', Math.abs(videoRate - 1.5) < 0.01, String(videoRate));
+check('视频被拉回开头', videoSeekedTo === 0, String(videoSeekedTo));
+check('元素没有被静音（静音就抓不到声音了）', fakeVideo.muted === undefined || fakeVideo.muted === false, String(fakeVideo.muted));
+check('没有误发 PRESCAN_DONE', !runtimeMessages.some((m) => m.type === 'PRESCAN_DONE'), JSON.stringify(runtimeMessages));
+
+console.log('\n8) 静音提示（切标签页把页面弄暂停了）');
+{
+  const s2 = store.get('asrSession');
+  s2.diag = { ...(s2.diag || {}), silent: true };
+  await chromeStub.storage.local.set({ asrSession: { ...s2 } });
+  await sleep(200);
+  const warnEl = getPanel().children.find((c) => c.classList.contains('warn'));
+  check('面板出现静音警告条', !!warnEl && warnEl.classList.contains('show'), String(warnEl?.className));
+
+  s2.diag.silent = false;
+  await chromeStub.storage.local.set({ asrSession: { ...s2 } });
+  await sleep(150);
+  check('恢复声音后警告消失', !warnEl.classList.contains('show'), String(warnEl?.className));
+}
+
+console.log('\n9) 增量预览行（边说边出字）');
+{
+  const s3 = store.get('asrSession');
+  s3.partial = { text: '正在说的半句', startMs: 6000, durationMs: 2000 };
+  await chromeStub.storage.local.set({ asrSession: { ...s3 } });
+  await sleep(200);
+
+  const body3 = getPanel().children.find((c) => c.classList.contains('body'));
+  const partialRow = body3.children.find((c) => c.classList.contains('partial'));
+  check('出现预览行', !!partialRow, String(partialRow?.className));
+  check(
+    '预览文本带省略号',
+    (partialRow?.children[1]?.textContent || '').startsWith('正在说的半句'),
+    partialRow?.children[1]?.textContent
+  );
+
+  s3.partial = null;
+  await chromeStub.storage.local.set({ asrSession: { ...s3 } });
+  await sleep(150);
+  check('定稿后预览消失', !body3.children.some((c) => c.classList.contains('partial')));
+}
+
+console.log('');
+if (failed) {
+  console.log(`${failed} 项失败`);
+  process.exit(1);
+}
+console.log('全部通过：面板构建、渲染、时间戳、高亮、开关、自动滚动都正常。');
+process.exit(0);
+
+
