@@ -26,6 +26,9 @@ let lastStartAt = 0; // 用于避免"关闭定时器"撞上新一轮开始
 async function injectSubtitle(tabId) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: [SUBTITLE_SCRIPT] });
+    // 面板有"空闲 15 秒自动隐藏"，已停止的会话注入后会被立刻藏起来，
+    // 所以注入完显式叫它显示一次（脚本里的 listenShowForce 会压掉自动隐藏）。
+    chrome.tabs.sendMessage(tabId, { type: 'SHOW_PANEL' }).catch(() => {});
     return true;
   } catch {
     // chrome:// 之类不允许注入，字幕层缺席但录制照常

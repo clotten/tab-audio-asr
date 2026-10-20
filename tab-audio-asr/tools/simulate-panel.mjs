@@ -1,4 +1,4 @@
-/**
+﻿/**
  * simulate-panel.mjs —— 用最小 DOM 桩把 content/subtitle.js 真跑一遍
  *
  * 面板跑在网页里，普通单测覆盖不到。这里手写一个够用的假 DOM
@@ -189,6 +189,12 @@ const changeListeners = [];
 const runtimeMessages = [];
 const chromeStub = {
   runtime: {
+    onMessage: {
+      _listeners: [],
+      addListener(fn) {
+        this._listeners.push(fn);
+      }
+    },
     sendMessage: async (msg) => {
       runtimeMessages.push(msg);
       return null;
@@ -333,6 +339,17 @@ await sleep(250);
 const whereMode = getPanel().children.find((c) => c.classList.contains('where'))?.children[1]?.textContent || '';
 check('底栏显示已停止', whereMode.includes('已停止'), whereMode);
 check('还没到自动淡出时间', !getPanel().classList.contains('hidden'));
+
+  // 超过空闲时间后：默认隐藏，但被「显示到页面」唤起过（forced）就必须留着
+  const stale = { ...sess, stoppedAt: Date.now() - 60_000 };
+  await chromeStub.storage.local.set({ asrSession: stale });
+  await sleep(200);
+  check('超过 15 秒后自动隐藏', getPanel().classList.contains('hidden'), getPanel().className);
+
+  // 模拟 SW 发来 SHOW_PANEL（注入后强制显示）
+  for (const fn of chromeStub.runtime.onMessage._listeners || []) fn({ type: 'SHOW_PANEL' });
+  await sleep(100);
+  check('收到 SHOW_PANEL 后强制显示', !getPanel().classList.contains('hidden'), getPanel().className);
 
 console.log('\n7) 整段预扫：拉回开头 + 设倍速 + 不静音元素');
 await chromeStub.storage.local.set({ prescanCommand: { at: Date.now(), rate: 1.5 } });

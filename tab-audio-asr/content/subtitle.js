@@ -1,4 +1,4 @@
-/**
+﻿/**
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -41,6 +41,8 @@
   let hideTimer = null;
   let dragging = null;
   let dead = false;
+  // 被「显示到页面」显式唤起时，忽略"空闲自动隐藏"（否则注入后立刻又藏起来）
+  let forced = false;
   let fsFullscreenRetry = false;
 
   // 渲染缓存
@@ -643,7 +645,7 @@
       stopTicker();
       return;
     }
-    if (!active && session.stoppedAt && Date.now() - session.stoppedAt > IDLE_HIDE_MS) {
+    if (!forced && !active && session.stoppedAt && Date.now() - session.stoppedAt > IDLE_HIDE_MS) {
       wrap.classList.add('hidden');
       stopTicker();
       return;
@@ -845,6 +847,18 @@
     }
   }
 
+  /** SW 在「显示到页面」时会发这条，用来压掉空闲自动隐藏 */
+  function listenShowForce() {
+    try {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg?.type !== 'SHOW_PANEL') return;
+        forced = true;
+        render();
+      });
+    } catch {
+      /* ignore */
+    }
+  }
   function listen() {
     try {
       chrome.storage.onChanged.addListener((changes, area) => {
@@ -873,6 +887,7 @@
   try {
     build();
     listen();
+    listenShowForce();
     load();
   } catch (err) {
     // 某些沙箱 iframe 里不允许嵌入，不影响录制；但打条日志，出问题时好排查
