@@ -108,7 +108,8 @@ function bindEvents() {
   el('historyBtn').addEventListener('click', restoreHistory);
   el('libLoadBtn').addEventListener('click', loadFromLibrary);
   el('libDelBtn').addEventListener('click', removeFromLibrary);
-  el('showPanelBtn').addEventListener('click', showPanel);
+  el('showDocPanelBtn').addEventListener('click', showPanel);
+  el('showLivePanelBtn').addEventListener('click', showPanel);
   el('refineBtn').addEventListener('click', refineAll);
   el('saveAudioBtn').addEventListener('click', saveRecording);
   el('prescanBtn').addEventListener('click', startPrescan);
@@ -134,6 +135,7 @@ function bindEvents() {
 /* ------------------------------ 离线精校 ------------------------------ */
 
 async function refineAll() {
+  setNoteSink('live');
   const name = session?.diag?.audioFile;
   if (!name) {
     return note('这次没有保存音频，无法精校：开始录制前要勾「同时保存音频」。', 'err');
@@ -205,6 +207,7 @@ async function saveRecording() {
  * 注意这不是"偷偷提前"——视频是真的在快进，只是不放声音。
  */
 async function startPrescan() {
+  setNoteSink('live');
   const next = readForm();
   if (!next.apiKey) {
     showTab('cfg');
@@ -521,6 +524,7 @@ function stopTicker() {
 /* ------------------------------ 开始 / 停止 ------------------------------ */
 
 async function start() {
+  setNoteSink('live');
   const next = readForm();
 
   if (!next.apiKey) {
@@ -571,6 +575,7 @@ async function start() {
 }
 
 async function stop() {
+  setNoteSink('live');
   await chrome.runtime.sendMessage({ type: 'STOP' }).catch(() => {});
   const { asrSession } = await chrome.storage.local.get('asrSession');
   session = asrSession || session;
@@ -669,6 +674,7 @@ async function ensureHostPermission(baseUrl) {
  * 进度靠 session.diag.ingest* 推回来，所以这里只负责发指令和提示。
  */
 async function ingestFromPage() {
+  setNoteSink('doc');
   const btn = el('ingestBtn');
   btn.disabled = true;
   btn.textContent = '准备中…';
@@ -856,6 +862,7 @@ async function restoreHistory() {
  * 结果决定走哪条路：现成字幕 > 直链文件 > HLS/DASH 分片 > 只能实时录。
  */
 async function probeMedia() {
+  setNoteSink('doc');
   const btn = el('probeBtn');
   btn.disabled = true;
   btn.textContent = '探测中…';
@@ -1077,10 +1084,17 @@ function safeName(name) {
 
 /* ------------------------------ 杂项 ------------------------------ */
 
+let noteSink = 'docNote';
+
+/** 指定后续提示显示在哪一组（整段提取 / 实时转录） */
+function setNoteSink(which) {
+  noteSink = which === 'live' ? 'liveNote' : 'docNote';
+}
+
 function note(text, kind = '') {
   // 写到**当前标签页自己的**提示区（转录页 runNote / 设置页 settingsNote）；
   // 之前两页共用一处，导致一条消息两个页面都能看到。
-  const box = el(currentTab === 'cfg' ? 'settingsNote' : 'runNote');
+  const box = el(currentTab === 'cfg' ? 'settingsNote' : noteSink);
   if (box) {
     box.textContent = text;
     box.className = 'note' + (kind ? ' ' + kind : '');
@@ -1090,6 +1104,8 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
+
 
 
 

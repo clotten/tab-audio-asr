@@ -26,25 +26,54 @@
         <div class="line"><span class="k">播放状态</span><span class="v" id="tabMedia">—</span></div>
       </section>
 
-      <section class="card">
+      <!-- 一伙：整段提取（直链媒体，不用等播放） -->
+      <section class="card group">
+        <p class="groupTitle">整段提取 · 不用等播放</p>
+        <div class="rowActions">
+          <button class="btn primary wide" id="ingestBtn" title="页面里的媒体是直链时，整段下载后转写，播之前就能拿到全稿">整段提取</button>
+        </div>
+        <div class="rowActions">
+          <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
+          <button class="btn" id="showDocPanelBtn" title="把整段提取得到的稿子显示到视频页（不重新识别）">显示字幕</button>
+        </div>
+        <p class="note" id="docNote"></p>
+      </section>
+
+      <!-- 一伙：实时转录（边播边转） -->
+      <section class="card group">
+        <p class="groupTitle">实时转录 · 跟着播放走</p>
         <div class="row">
           <span class="timer" id="timer">00:00:00</span>
           <button class="btn primary" id="toggleBtn">开始转录</button>
         </div>
         <div class="meta" id="progress">尚未开始</div>
-
         <div class="rowActions">
-          <button class="btn primary wide" id="ingestBtn" title="页面里的媒体是直链时，整段下载后转写，播之前就能拿到全稿">整段提取（不用等播放）</button>
-        </div>
-        <div class="rowActions">
-          <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
+          <button class="btn" id="showLivePanelBtn" title="把实时转录的字幕显示到视频页">显示字幕</button>
           <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
-          <button class="btn" id="showPanelBtn" title="把当前这份稿子显示到视频页面上（不重新识别）">显示字幕</button>
           <span class="mini" id="prescanHint"></span>
         </div>
-        <p class="note" id="runNote"></p>
+        <label class="check">
+          <input type="checkbox" id="mutePlayback" />
+          <span>静音录制（捕获声音但不放出来）</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="saveAudio" />
+          <span>同时保存音频（WAV，录完可下载）</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="sileroVad" />
+          <span>Silero VAD（判别音乐/掌声并跳过）</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="incrementalAsr" />
+          <span>增量提交（边说边出字，已说完的句子立刻定稿）</span>
+        </label>
+        <label>每段秒数（仅回退通路生效；实时通路自动切句）<input id="segmentSeconds" type="number" min="10" max="600" step="5" /></label>
+        <label>预扫倍速（1–2 之间最稳，实测 1.5 倍准确率最好）<input id="prescanRate" type="number" min="1" max="2" step="0.1" /></label>
+        <p class="note" id="liveNote"></p>
       </section>
 
+      <!-- 文字稿 -->
       <section class="card">
         <div class="rowActions">
           <select id="libSelect" title="字幕库：按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
@@ -69,7 +98,6 @@
         </div>
       </section>
     </section>
-
     <!-- ==================== 设置页：改一次就不动 ==================== -->
     <section class="tabPage" data-page="cfg">
       <!-- 操作条放最上面：改完就点，不用滚到底部找按钮 -->
@@ -81,15 +109,16 @@
       <p class="note" id="settingsNote"></p>
 
       <section class="card">
-        <p class="sectLabel">显示</p>
+      <section class="card">
+        <p class="sectLabel">字幕</p>
         <label class="check">
           <input type="checkbox" id="subtitleEnabled" />
-          <span>在视频页显示悬浮字幕</span>
+          <span>在视频页显示悬浮字幕（两种来源共用一个开关）</span>
         </label>
         <label class="inline">字号<input id="subtitleFontSize" type="number" min="12" max="48" step="2" /></label>
+        <p class="mini">字号对「实时转录」和「整段提取」两套字幕都生效。</p>
       </section>
 
-      <section class="card">
         <p class="sectLabel">音频</p>
         <label class="check">
           <input type="checkbox" id="mutePlayback" />

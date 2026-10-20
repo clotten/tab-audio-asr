@@ -800,6 +800,15 @@
       area.classList.add('show');
       return;
     }
+    // 整段提取期间（status = processing）不该说"正在聆听"——那是录音的说法
+    if (session?.status === 'processing') {
+      const done = session.diag?.ingestDone || 0;
+      const phase = { download: '下载中', decode: '解码中', transcribe: '转写中' }[session.diag?.ingestPhase] || '处理中';
+      parts.liveText.textContent = `整段提取：${phase}${done ? `（已转写 ${done} 段）` : ''}`;
+      area.classList.add('show');
+      return;
+    }
+
     if (live) {
       parts.liveText.textContent = '正在聆听…';
       area.classList.add('show');
