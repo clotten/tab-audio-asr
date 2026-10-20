@@ -453,6 +453,17 @@ console.log('\n10) 静态稿（整段提取）按视频时间轴高亮');
   check('跟随按钮保持隐藏（没被误判为用户滚动）', !followBtn?.classList?.contains('show'), followBtn?.className);
 
   // 顶部显示视频进度而不是处理耗时
+
+  // 空档期（句子之间有停顿）：要停在前面最近的句子，绝不能跳回末尾
+  fakeVideo.currentTime = 17.5; // 第二句 10–18 秒刚结束前
+  await sleep(350);
+  const curGap = body.children.filter((c) => c.className.includes('row') && c.classList.contains('cur'));
+  check('空档时仍有高亮（前面最近一句）', curGap.length === 1, `cur=${curGap.length}`);
+
+  fakeVideo.currentTime = 0; // 视频没到任何句子
+  await sleep(350);
+  const curStart = body.children.filter((c) => c.className.includes('row') && c.classList.contains('cur'));
+  check('视频在最开头时高亮第一句而不是最后一句', (curStart[0]?.children[1]?.textContent || '').includes('第一句'), curStart[0]?.children[1]?.textContent);
   const timerText = getPanel().children.find((c) => c.className.includes('head'))?.children?.[1]?.textContent || '';
   check('顶部显示视频进度', /^\d{2}:\d{2}/.test(timerText), timerText);
 

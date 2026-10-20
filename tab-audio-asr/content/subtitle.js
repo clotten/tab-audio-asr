@@ -1,4 +1,4 @@
-﻿/**
+/**
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -756,24 +756,40 @@
     area.classList.remove('show');
   }
 
+  /**
+   * 选出"视频当前时刻对应的那一句"。
+   * 时间轴里句子之间有空档（说话的停顿），所以找不到正好覆盖的句子时，
+   * 要停在**它前面最近的一句**，而不是跳到别的地方（之前就是回退成滚到底部）。
+   */
+  function currentIndexFor(items, t) {
+    if (t == null) return null;
+    let covering = null;
+    let coveringStart = -Infinity;
+    let preceding = null;
+    let precedingStart = -Infinity;
+
+    for (const item of items) {
+      const start = mappedStart(item);
+      if (start == null) continue;
+      const end = start + Math.max(0.6, (item.durationMs || 0) / 1000);
+
+      if (t >= start - 0.25 && t < end && start > coveringStart) {
+        coveringStart = start;
+        covering = item.index;
+      }
+      if (start <= t + 0.25 && start > precedingStart) {
+        precedingStart = start;
+        preceding = item.index;
+      }
+    }
+    return covering != null ? covering : preceding;
+  }
   function updateHighlight() {
     const video = findVideo();
     const t = video ? video.currentTime : null;
     let curIndex = null;
 
-    if (t != null) {
-      // 句子区间可能重叠（合并切句时会有），取"起点最靠后"的那句更符合直觉
-      let bestStart = -Infinity;
-      for (const item of doneItems()) {
-        const start = mappedStart(item);
-        if (start == null) continue;
-        const end = start + Math.max(0.6, (item.durationMs || 0) / 1000);
-        if (t >= start - 0.25 && t < end && start > bestStart) {
-          bestStart = start;
-          curIndex = item.index;
-        }
-      }
-    }
+    if (t != null) curIndex = currentIndexFor(doneItems(), t);
 
     for (const [index, el] of rowEls) {
       const should = index === curIndex;
@@ -844,26 +860,15 @@
       const keepTop = parts.body.scrollTop;
       rebuildRows(items, partial);
 
-      // 静态稿（整段提取/导入）：定位到"视频当前播到的那一句"，
-      // 而不是滚到底部——否则一打开就跳到全文末尾，看着像错乱。
+      // 静态稿（整段提取/导入）：定位到"视频当前播到的那一句"。
+      // 句子之间有空档，所以由 currentIndexFor 回退到"前面最近的一句"；
+      // 一句都还没到（视频没开始播）就停在顶部，绝不跳到末尾。
       if (resolveMode().scrollTarget === 'current' && followLatest) {
         const video = findVideo();
         const t = video ? video.currentTime : null;
-        let target = null;
-        if (t != null) {
-          let bestStart = -Infinity;
-          for (const item of items) {
-            const start = mappedStart(item);
-            if (start == null) continue;
-            const end = start + Math.max(0.6, (item.durationMs || 0) / 1000);
-            if (t >= start - 0.25 && t < end && start > bestStart) {
-              bestStart = start;
-              target = item.index;
-            }
-          }
-        }
+        const target = currentIndexFor(items, t);
         if (target != null) scrollToRow(target);
-        else scrollToBottom();
+        else parts.body.scrollTop = 0;
       } else if (followLatest) {
         scrollToBottom();
       } else {
@@ -1116,6 +1121,7 @@
     }
   }
 })();
+
 
 
 
