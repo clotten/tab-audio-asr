@@ -134,6 +134,7 @@ function bindEvents() {
 /* ------------------------------ 离线精校 ------------------------------ */
 
 async function refineAll() {
+  showTab('lib');
   setNoteSink('live');
   const name = session?.diag?.audioFile;
   if (!name) {
@@ -176,6 +177,7 @@ async function refineAll() {
 /* ------------------------------ 保存音频 ------------------------------ */
 
 async function saveRecording() {
+  showTab('lib');
   const name = session?.diag?.audioFile;
   if (!name) {
     return note('这次没有保存音频：开始录制前要勾上「同时保存音频」。', 'err');
@@ -591,6 +593,7 @@ async function stop() {
 }
 
 async function resetSession() {
+  showTab('lib');
   const name = session?.diag?.audioFile;
   await chrome.runtime.sendMessage({ type: 'RESET' }).catch(() => {});
   if (name) await removeAudioFile(name).catch(() => {});
@@ -1014,6 +1017,7 @@ function plainText({ withTime = false } = {}) {
 }
 
 async function copyAll() {
+  showTab('lib');
   const text = plainText();
   if (!text) return note('还没有可复制的内容。', 'err');
   try {
@@ -1025,6 +1029,7 @@ async function copyAll() {
 }
 
 function exportTxt() {
+  showTab('lib');
   const text = plainText({ withTime: true });
   if (!text) return note('还没有可导出的内容。', 'err');
 
@@ -1041,6 +1046,7 @@ function exportTxt() {
 }
 
 function exportSrt() {
+  showTab('lib');
   const segs = collectSegments();
   if (!segs.length) return note('还没有可导出的内容。', 'err');
 
@@ -1115,6 +1121,7 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
 
 
 

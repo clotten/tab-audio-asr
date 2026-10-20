@@ -20,7 +20,7 @@
       <button class="tab" data-tab="cfg">设置</button>
     </nav>
 
-    <!-- ==================== 转录页 ==================== -->
+    <!-- ==================== 转录页：只放操作 ==================== -->
     <section class="tabPage active" data-page="run">
       <section class="card">
         <div class="line"><span class="k">标签页</span><span class="v ellipsis" id="tabTitle">—</span></div>
@@ -35,7 +35,7 @@
         </div>
         <div class="rowActions">
           <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
-          <button class="btn" id="showDocPanelBtn" title="把整段提取得到的稿子显示到视频页（不重新识别）">显示字幕</button>
+          <button class="btn" id="showDocPanelBtn" title="把整段提取得到的字幕显示到视频页（不重新识别）">显示字幕</button>
         </div>
         <p class="note" id="docNote"></p>
       </section>
@@ -74,14 +74,32 @@
         <label>预扫倍速（1–2 之间最稳，实测 1.5 倍准确率最好）<input id="prescanRate" type="number" min="1" max="2" step="0.1" /></label>
         <p class="note" id="liveNote"></p>
       </section>
+    </section>
 
-      <!-- 文字稿 -->
+    <!-- ==================== 字幕库：选稿 + 看字幕 ==================== -->
+    <section class="tabPage" data-page="lib">
+      <section class="card">
+        <p class="groupTitle">字幕库</p>
+        <div class="rowActions">
+          <select id="libSelect" title="按视频保存的字幕" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
+            <option value="">字幕库（空）</option>
+          </select>
+        </div>
+        <div class="rowActions">
+          <button class="btn" id="libLoadBtn">加载这份</button>
+          <button class="btn ghost" id="libDelBtn">删除这份</button>
+        </div>
+        <p class="mini">整段提取跑完自动入库；打开同一个视频自动命中。最多 80 份，超了淘汰最旧的。</p>
+        <p class="note" id="libNote"></p>
+      </section>
+
+      <!-- 字幕正文（原「文字稿」） -->
       <section class="card">
         <div class="resultHead">
-          <span>文字稿</span>
+          <span>字幕</span>
           <span id="counts">0 段 / 0 字</span>
         </div>
-        <div class="transcript" id="transcript"><span class="empty">还没有内容，点上面的「开始转录」或「整段提取」。</span></div>
+        <div class="transcript" id="transcript"><span class="empty">还没有内容，去「转录」页点「开始转录」或「整段提取」。</span></div>
         <div class="rowActions">
           <button class="btn" id="copyBtn">复制全文</button>
           <button class="btn" id="txtBtn">导出 TXT</button>
@@ -91,27 +109,6 @@
           <button class="btn" id="historyBtn" hidden title="把上一份被覆盖或清空的稿子找回来">恢复上一份</button>
           <button class="btn ghost" id="resetBtn">清空</button>
         </div>
-      </section>
-    </section>
-
-    <!-- ==================== 字幕库（独立标签页） ==================== -->
-    <section class="tabPage" data-page="lib">
-      <section class="card">
-        <p class="groupTitle">我的字幕库</p>
-        <div class="rowActions">
-          <select id="libSelect" title="按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
-            <option value="">字幕库（空）</option>
-          </select>
-        </div>
-        <div class="rowActions">
-          <button class="btn" id="libLoadBtn">加载到当前稿</button>
-          <button class="btn ghost" id="libDelBtn">删除这份</button>
-        </div>
-        <p class="mini">
-          整段提取跑完会自动入库；打开同一个视频时自动命中，不用再识别。
-          最多保留 80 份，超了淘汰最旧的。
-        </p>
-        <p class="note" id="libNote"></p>
       </section>
     </section>
 
