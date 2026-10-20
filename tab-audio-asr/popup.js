@@ -376,7 +376,8 @@ function render() {
   pill.textContent = text;
 
   const btn = el('toggleBtn');
-  btn.textContent = active ? '停止' : status === 'stopped' || status === 'error' ? '重新开始' : '开始转录';
+  const staticDoc = session?.diag?.source === 'url';
+  btn.textContent = active ? '停止' : staticDoc ? '开始转录' : status === 'stopped' || status === 'error' ? '重新开始' : '开始转录';
   btn.classList.toggle('stop', active);
   btn.disabled = busy;
 
@@ -400,6 +401,14 @@ function render() {
 }
 
 function renderTimer() {
+  // 整段提取的会话没有录制时长，显示稿子覆盖的时长更有意义
+  if (session?.diag?.source === 'url') {
+    const items = (session.segments || []).filter((s) => s.status === 'done');
+    const last = items[items.length - 1];
+    const cover = last ? (last.startMs || 0) + (last.durationMs || 0) : session.diag.ingestDurationMs || 0;
+    el('timer').textContent = clock(cover);
+    return;
+  }
   const ms = elapsedOf(session);
   el('timer').textContent = clock(ms);
 }

@@ -595,6 +595,20 @@
     parts.body.scrollTop = parts.body.scrollHeight;
   }
 
+  /** 这份稿子是不是"整段提取/导入"的静态字幕（没有录制过程） */
+  function isStaticTranscript() {
+    return session?.diag?.source === 'url';
+  }
+
+  /** 把某一句滚到可视区中间（静态稿跟随播放用） */
+  function scrollToRow(index) {
+    const el = rowEls.get(index);
+    const body = parts.body;
+    if (!el || !body) return;
+    const top = el.offsetTop - body.clientHeight / 2 + el.offsetHeight / 2;
+    body.scrollTop = Math.max(0, Math.min(top, body.scrollHeight - body.clientHeight));
+  }
+
   function rebuildRows(items, partial) {
     const body = parts.body;
     body.textContent = '';
@@ -747,7 +761,9 @@
     updateLive(partial);
 
     parts.whereCount.textContent = `${items.length} 句 / ${items.reduce((n, s) => n + s.text.length, 0)} 字`;
-    parts.whereMode.textContent = active ? '录制中' : '已停止';
+    if (parts.latestBtn) parts.latestBtn.textContent = isStaticTranscript() ? '跟随播放' : '回到最新';
+
+    parts.whereMode.textContent = isStaticTranscript() ? '整段稿（跟随播放）' : active ? '录制中' : '已停止';
 
     updateBadge();
 
@@ -766,6 +782,18 @@
   }
 
   function updateBadge() {
+    // 整段提取/导入的稿子：显示"视频播到哪"，而不是"处理花了多久"
+    if (isStaticTranscript()) {
+      const video = findVideo();
+      if (!video) {
+        parts.time.textContent = '--:--';
+        return;
+      }
+      const total = Number.isFinite(video.duration) ? ` / ${fmtClock(video.duration)}` : '';
+      parts.time.textContent = `${fmtClock(video.currentTime)}${total}`;
+      return;
+    }
+
     if (!session?.startedAt) {
       parts.time.textContent = '00:00';
       return;
@@ -785,7 +813,10 @@
         updateBadge();
         const { curIndex } = updateHighlight();
         // 高亮换人了才滚，别每 250ms 都拽一次滚动条
-        if (curIndex != null && curIndex !== lastCurIndex && followLatest) scrollToBottom();
+        if (curIndex != null && curIndex !== lastCurIndex && followLatest) {
+          if (isStaticTranscript()) scrollToRow(curIndex);
+          else scrollToBottom();
+        }
         lastCurIndex = curIndex;
       } else {
         // 已停止但还在看（例如整段提取后拖时间轴）：也要跟着视频时间刷高亮
