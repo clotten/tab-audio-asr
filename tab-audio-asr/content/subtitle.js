@@ -362,6 +362,15 @@
       e.stopPropagation();
       followLatest = true;
       latestBtn.classList.remove('show');
+
+      // 静态稿「跟随播放」：跳到视频当前那一句，而不是全文末尾
+      if (isStaticTranscript()) {
+        updateHighlight();
+        if (lastCurIndex != null) {
+          scrollToRow(lastCurIndex);
+          return;
+        }
+      }
       scrollToBottom();
     });
 
