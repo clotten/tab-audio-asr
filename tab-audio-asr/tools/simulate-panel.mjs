@@ -492,6 +492,44 @@ console.log('\n12) 别的视频的稿子不显示在本页');
 
   const empty = body.children.find((c) => c.classList.contains('empty'));
   check('给出提示文案', (empty?.textContent || '').includes('别的文字稿') || (empty?.textContent || '').includes('本页还没有'), empty?.textContent);
+console.log('\n13) 页面内设置抽屉');
+{
+  const head = getPanel().children.find((c) => c.className.includes('head'));
+  const gear = head.children.find((c) => c.className?.includes('gear'));
+  check('头部有齿轮按钮', !!gear, String(gear?.className));
+
+  const drawer = getPanel().children.find((c) => c.className.includes('drawer'));
+  check('面板里有抽屉容器', !!drawer, String(drawer?.className));
+  check('默认是收起的', !drawer.classList.contains('show'), drawer.className);
+
+  // 点齿轮 → 打开
+  gear.dispatch('click', { stopPropagation() {} });
+  await sleep(100);
+  check('点齿轮后展开', drawer.classList.contains('show'), drawer.className);
+
+  // 抽屉里应有 API Key / 模型 / 术语表 输入与 5 个开关
+  const inputs = drawer.children.filter((c) => ['input', 'textarea'].includes(c.tagName?.toLowerCase()));
+  const checks = drawer.children.filter((c) => c.className?.includes('row-check'));
+  check('有 3 个输入框（Key/模型/术语表）', inputs.length === 3, `inputs=${inputs.length}`);
+  check('有 5 个开关', checks.length === 5, `checks=${checks.length}`);
+
+  // 填值并保存 → 写入 asrSettings
+  inputs[0].value = 'sk-test-123';
+  inputs[1].value = 'Qwen/Qwen3-ASR-1.7B';
+  inputs[2].value = '无线局域网';
+  const saveBtn = drawer.children
+    .find((c) => c.className?.includes('drawer-actions'))
+    ?.children.find((c) => c.textContent === '保存');
+  check('有保存按钮', !!saveBtn, String(saveBtn?.textContent));
+  saveBtn.dispatch('click', { stopPropagation() {} });
+  await sleep(200);
+
+  const saved = store.get('asrSettings') || {};
+  check('API Key 已写入', saved.apiKey === 'sk-test-123', String(saved.apiKey));
+  check('术语表已写入', saved.glossary === '无线局域网', String(saved.glossary));
+  check('保存后抽屉收起', !drawer.classList.contains('show'), drawer.className);
+}
+
 }
 console.log('\n11) 源码不变式：滚动目标必须由模式决定');
 {
@@ -512,6 +550,7 @@ if (failed) {
 }
 console.log('全部通过：面板构建、渲染、时间戳、高亮、开关、自动滚动都正常。');
 process.exit(0);
+
 
 
 
