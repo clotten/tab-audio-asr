@@ -257,3 +257,48 @@ label.inline input {
   width: 74px;
   margin-top: 0;
 }
+
+/* ---------------- 标签页（替代"往下展开"） ---------------- */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line, rgba(255,255,255,.08));
+}
+.tabs .tab {
+  flex: 1 1 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 8px 8px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+.tabs .tab:hover { color: #e9eef5; }
+.tabs .tab.active {
+  color: #e9eef5;
+  font-weight: 600;
+  border-bottom-color: var(--accent, #3b82f6);
+}
+
+.tabPage { display: none; }
+.tabPage.active { display: block; }
+
+/* 设置页顶部的操作条：改完立刻能点，不用滚到底 */
+.stickyBar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  background: var(--bg, #14181f);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}

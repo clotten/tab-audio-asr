@@ -55,7 +55,7 @@ async function init() {
   await refreshHistory();
   await refreshLibrary();
 
-  if (!settings.apiKey) el('settingsBox').open = true;
+  if (!settings.apiKey) showTab('cfg');
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -70,8 +70,25 @@ async function init() {
   });
 }
 
+/* ------------------------------ 标签页 ------------------------------ */
+
+let currentTab = 'run';
+
+/** 切换标签页（原来靠 <details> 往下展开，用户觉得难用） */
+function showTab(name) {
+  currentTab = name === 'cfg' ? 'cfg' : 'run';
+  for (const btn of document.querySelectorAll('.tabs .tab')) {
+    btn.classList.toggle('active', btn.dataset.tab === currentTab);
+  }
+  for (const page of document.querySelectorAll('.tabPage')) {
+    page.classList.toggle('active', page.dataset.page === currentTab);
+  }
+}
 function bindEvents() {
   el('toggleBtn').addEventListener('click', () => (isActive() ? stop() : start()));
+  for (const btn of document.querySelectorAll('.tabs .tab')) {
+    btn.addEventListener('click', () => showTab(btn.dataset.tab));
+  }
   el('saveBtn').addEventListener('click', async () => {
     const next = readForm();
     if (!next.apiKey) return note('API Key 不能为空。', 'err');
@@ -116,7 +133,7 @@ function bindEvents() {
 
 async function correctAll() {
   if (!settings.apiKey) {
-    el('settingsBox').open = true;
+    showTab('cfg');
     return note('先填 API Key。', 'err');
   }
 
@@ -151,7 +168,7 @@ async function refineAll() {
     return note('这次没有保存音频，无法精校：开始录制前要勾「同时保存音频」。', 'err');
   }
   if (!settings.apiKey) {
-    el('settingsBox').open = true;
+    showTab('cfg');
     return note('先填 API Key。', 'err');
   }
 
@@ -219,7 +236,7 @@ async function saveRecording() {
 async function startPrescan() {
   const next = readForm();
   if (!next.apiKey) {
-    el('settingsBox').open = true;
+    showTab('cfg');
     return note('请先填写 API Key。', 'err');
   }
   if (!activeTab?.id) return note('没有拿到当前标签页。', 'err');
@@ -536,7 +553,7 @@ async function start() {
   const next = readForm();
 
   if (!next.apiKey) {
-    el('settingsBox').open = true;
+    showTab('cfg');
     note('请先填写 API Key（硅基流动控制台 → API 密钥）。', 'err');
     return;
   }
@@ -1095,6 +1112,8 @@ function note(text, kind = '') {
   box.className = 'note' + (kind ? ' ' + kind : '');
   el('hint').textContent = text;
 }
+
+
 
 
 

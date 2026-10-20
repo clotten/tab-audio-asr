@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -14,100 +14,121 @@
       <span class="pill" id="statusPill">空闲</span>
     </header>
 
-    <section class="card">
-      <div class="line"><span class="k">标签页</span><span class="v ellipsis" id="tabTitle">—</span></div>
-      <div class="line"><span class="k">播放状态</span><span class="v" id="tabMedia">—</span></div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="run">转录</button>
+      <button class="tab" data-tab="cfg">设置</button>
+    </nav>
+
+    <!-- ==================== 转录页：日常操作 ==================== -->
+    <section class="tabPage active" data-page="run">
+      <section class="card">
+        <div class="line"><span class="k">标签页</span><span class="v ellipsis" id="tabTitle">—</span></div>
+        <div class="line"><span class="k">播放状态</span><span class="v" id="tabMedia">—</span></div>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <span class="timer" id="timer">00:00:00</span>
+          <button class="btn primary" id="toggleBtn">开始转录</button>
+        </div>
+        <div class="meta" id="progress">尚未开始</div>
+
+        <div class="rowActions">
+          <button class="btn primary wide" id="ingestBtn" title="页面里的媒体是直链时，整段下载后转写，播之前就能拿到全稿">整段提取（不用等播放）</button>
+        </div>
+        <div class="rowActions">
+          <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
+          <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
+          <span class="mini" id="prescanHint"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="resultHead">
+          <span>文字稿</span>
+          <span id="counts">0 段 / 0 字</span>
+        </div>
+        <div class="transcript" id="transcript"><span class="empty">还没有内容，点上面的「开始转录」。</span></div>
+        <div class="rowActions">
+          <button class="btn" id="copyBtn">复制全文</button>
+          <button class="btn" id="txtBtn">导出 TXT</button>
+          <button class="btn" id="srtBtn">导出 SRT</button>
+          <button class="btn" id="correctBtn" title="把整段稿子交给对话模型，按术语表纠正同音错字">校正全文</button>
+          <button class="btn" id="refineBtn" title="用保存的 WAV 按 20 秒上下文重新识别一遍（准得多，但耗时几分钟）">离线精校</button>
+          <button class="btn" id="saveAudioBtn" title="下载这次录到的 WAV 音频">保存音频</button>
+          <button class="btn" id="showPanelBtn" title="把当前这份稿子显示到视频页面上（不重新识别）">显示到页面</button>
+          <button class="btn" id="historyBtn" hidden title="把上一份被覆盖或清空的稿子找回来">恢复上一份</button>
+          <button class="btn ghost" id="resetBtn">清空</button>
+        </div>
+        <div class="rowActions">
+          <select id="libSelect" title="字幕库：按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
+            <option value="">字幕库（空）</option>
+          </select>
+          <button class="btn" id="libLoadBtn">加载</button>
+          <button class="btn ghost" id="libDelBtn">删除</button>
+        </div>
+      </section>
     </section>
 
-    <section class="card">
-      <div class="row">
-        <span class="timer" id="timer">00:00:00</span>
-        <button class="btn primary" id="toggleBtn">开始转录</button>
-      </div>
-      <div class="meta" id="progress">尚未开始</div>
-      <p class="sectLabel">本页工具</p>
-      <div class="rowActions">
-        <button class="btn primary wide" id="ingestBtn" title="页面里的媒体是直链时，整段下载后转写，播之前就能拿到全稿">整段提取（不用等播放）</button>
-      </div>
-      <div class="rowActions">
-        <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
-        <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
-        <span class="mini" id="prescanHint"></span>
-      </div>
-    </section>
-
-    <section class="card">
-      <p class="sectLabel">显示</p>
-      <label class="check">
-        <input type="checkbox" id="subtitleEnabled" />
-        <span>在视频页显示悬浮字幕</span>
-      </label>
-      <label class="inline">字号<input id="subtitleFontSize" type="number" min="12" max="48" step="2" /></label>
-
-      <p class="sectLabel">音频</p>
-      <label class="check">
-        <input type="checkbox" id="mutePlayback" />
-        <span>静音录制（捕获声音但不放出来）</span>
-      </label>
-      <label class="check">
-        <input type="checkbox" id="saveAudio" />
-        <span>同时保存音频（WAV，录完可下载）</span>
-      </label>
-
-      <p class="sectLabel">识别</p>
-      <label class="check">
-        <input type="checkbox" id="sileroVad" />
-        <span>Silero VAD（判别音乐/掌声并跳过）</span>
-      </label>
-      <label class="check">
-        <input type="checkbox" id="incrementalAsr" />
-        <span>增量提交（边说边出字，已说完的句子立刻定稿）</span>
-      </label>
-    </section>
-
-    <details class="card" id="settingsBox">
-      <summary>接口与模型</summary>
-      <label>API Key<input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
-      <label>模型名<input id="model" type="text" spellcheck="false" /></label>
-      <label>接口地址<input id="baseUrl" type="text" spellcheck="false" /></label>
-      <label>纠错模型（事后校正用的对话模型）<input id="correctModel" type="text" spellcheck="false" /></label>
-      <label>每段秒数（仅回退通路生效；实时通路自动切句）<input id="segmentSeconds" type="number" min="10" max="600" step="5" /></label>
-      <label>预扫倍速（1–2 之间最稳，实测 1.5 倍准确率最好）<input id="prescanRate" type="number" min="1" max="2" step="0.1" /></label>
-      <label>术语表（一行一条；<code>错=>对</code> 会本地即时替换，其余作为纠错提示）
-        <textarea id="glossary" rows="6" spellcheck="false"></textarea>
-      </label>
-      <div class="rowActions">
+    <!-- ==================== 设置页：改一次就不动 ==================== -->
+    <section class="tabPage" data-page="cfg">
+      <!-- 操作条放最上面：改完就点，不用滚到底部找按钮 -->
+      <div class="stickyBar">
+        <button class="btn primary" id="saveBtn">保存设置</button>
         <button class="btn" id="testBtn">自测接口</button>
         <button class="btn" id="vadTestBtn" title="检查 Silero VAD 的运行时/模型是否正常">VAD 自检</button>
-        <button class="btn" id="saveBtn">保存设置</button>
       </div>
       <p class="note" id="settingsNote"></p>
-    </details>
 
-    <section class="card">
-      <div class="resultHead">
-        <span>文字稿</span>
-        <span id="counts">0 段 / 0 字</span>
-      </div>
-      <div class="transcript" id="transcript"><span class="empty">还没有内容，点上面的「开始转录」。</span></div>
-      <div class="rowActions">
-        <button class="btn" id="copyBtn">复制全文</button>
-        <button class="btn" id="txtBtn">导出 TXT</button>
-        <button class="btn" id="srtBtn">导出 SRT</button>
-        <button class="btn" id="correctBtn" title="把整段稿子交给对话模型，按术语表纠正同音错字">校正全文</button>
-        <button class="btn" id="refineBtn" title="用保存的 WAV 按 20 秒上下文重新识别一遍（准得多，但耗时几分钟）">离线精校</button>
-        <button class="btn" id="saveAudioBtn" title="下载这次录到的 WAV 音频">保存音频</button>
-        <button class="btn" id="showPanelBtn" title="把当前这份稿子显示到视频页面上（不重新识别）">显示到页面</button>
-        <button class="btn" id="historyBtn" hidden title="把上一份被覆盖或清空的稿子找回来">恢复上一份</button>
-        <button class="btn ghost" id="resetBtn">清空</button>
-      </div>
-      <div class="rowActions">
-        <select id="libSelect" title="字幕库：按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
-          <option value="">字幕库（空）</option>
-        </select>
-        <button class="btn" id="libLoadBtn">加载</button>
-        <button class="btn ghost" id="libDelBtn">删除</button>
-      </div>
+      <section class="card">
+        <p class="sectLabel">接口</p>
+        <label>API Key<input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
+        <label>模型名<input id="model" type="text" spellcheck="false" /></label>
+        <label>接口地址<input id="baseUrl" type="text" spellcheck="false" /></label>
+        <label>纠错模型（事后校正用的对话模型）<input id="correctModel" type="text" spellcheck="false" /></label>
+      </section>
+
+      <section class="card">
+        <p class="sectLabel">显示</p>
+        <label class="check">
+          <input type="checkbox" id="subtitleEnabled" />
+          <span>在视频页显示悬浮字幕</span>
+        </label>
+        <label class="inline">字号<input id="subtitleFontSize" type="number" min="12" max="48" step="2" /></label>
+      </section>
+
+      <section class="card">
+        <p class="sectLabel">音频</p>
+        <label class="check">
+          <input type="checkbox" id="mutePlayback" />
+          <span>静音录制（捕获声音但不放出来）</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="saveAudio" />
+          <span>同时保存音频（WAV，录完可下载）</span>
+        </label>
+      </section>
+
+      <section class="card">
+        <p class="sectLabel">识别</p>
+        <label class="check">
+          <input type="checkbox" id="sileroVad" />
+          <span>Silero VAD（判别音乐/掌声并跳过）</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="incrementalAsr" />
+          <span>增量提交（边说边出字，已说完的句子立刻定稿）</span>
+        </label>
+        <label>每段秒数（仅回退通路生效；实时通路自动切句）<input id="segmentSeconds" type="number" min="10" max="600" step="5" /></label>
+        <label>预扫倍速（1–2 之间最稳，实测 1.5 倍准确率最好）<input id="prescanRate" type="number" min="1" max="2" step="0.1" /></label>
+      </section>
+
+      <section class="card">
+        <p class="sectLabel">术语表</p>
+        <label>一行一条；<code>错=>对</code> 会本地即时替换，其余作为纠错提示
+          <textarea id="glossary" rows="6" spellcheck="false"></textarea>
+        </label>
+      </section>
     </section>
 
     <footer>
@@ -118,9 +139,3 @@
     <script type="module" src="popup.js"></script>
   </body>
 </html>
-
-
-
-
-
-
