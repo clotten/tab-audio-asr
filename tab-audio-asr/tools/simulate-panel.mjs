@@ -374,26 +374,30 @@ console.log('\n8) 静音提示（切标签页把页面弄暂停了）');
   check('恢复声音后警告消失', !warnEl.classList.contains('show'), String(warnEl?.className));
 }
 
-console.log('\n9) 增量预览行（边说边出字）');
+console.log('\n9) 「生成中」独立一栏（不再是正文里的一行）');
 {
   const s3 = store.get('asrSession');
   s3.partial = { text: '正在说的半句', startMs: 6000, durationMs: 2000 };
   await chromeStub.storage.local.set({ asrSession: { ...s3 } });
   await sleep(200);
 
-  const body3 = getPanel().children.find((c) => c.classList.contains('body'));
-  const partialRow = body3.children.find((c) => c.classList.contains('partial'));
-  check('出现预览行', !!partialRow, String(partialRow?.className));
+  const live = getPanel().children.find((c) => c.classList.contains('live'));
+  check('出现「生成中」栏', !!live && live.classList.contains('show'), String(live?.className));
+
+  const liveText = live && live.children.find((c) => c.classList.contains('live-text'));
   check(
-    '预览文本带省略号',
-    (partialRow?.children[1]?.textContent || '').startsWith('正在说的半句'),
-    partialRow?.children[1]?.textContent
+    '栏里显示正在说的那句',
+    (liveText?.textContent || '').startsWith('正在说的半句'),
+    liveText?.textContent
   );
+
+  const body3 = getPanel().children.find((c) => c.classList.contains('body'));
+  check('正文里不再混入半句', !body3.children.some((c) => c.className.includes('partial')));
 
   s3.partial = null;
   await chromeStub.storage.local.set({ asrSession: { ...s3 } });
   await sleep(150);
-  check('定稿后预览消失', !body3.children.some((c) => c.classList.contains('partial')));
+  check('定稿后「生成中」栏收起', !live.classList.contains('show'), live.className);
 }
 
 console.log('');
@@ -403,5 +407,6 @@ if (failed) {
 }
 console.log('全部通过：面板构建、渲染、时间戳、高亮、开关、自动滚动都正常。');
 process.exit(0);
+
 
 

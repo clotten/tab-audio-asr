@@ -102,6 +102,20 @@
 
   function ensureMapping(items) {
     if (!session?.startedAt) return;
+
+    // 整段提取（直链媒体）的时间戳本来就相对视频开头，不需要 wall→video 映射，
+    // 直接按 startMs 当视频时间——这样播放时就能正常高亮。
+    if (session.diag?.source === 'url') {
+      if (mappedForSession !== session.startedAt) {
+        mappedForSession = session.startedAt;
+        itemVideoStart.clear();
+      }
+      for (const item of items) {
+        if (!itemVideoStart.has(item.index)) itemVideoStart.set(item.index, (item.startMs || 0) / 1000);
+      }
+      return;
+    }
+
     if (mappedForSession !== session.startedAt) {
       mappedForSession = session.startedAt;
       itemVideoStart.clear();
@@ -259,6 +273,33 @@
 
       .empty { color: rgba(233,238,245,.42); font-style: italic; padding: 6px 7px; }
 
+      /* 「生成中」独立一栏：和已确认的正文分开，避免半句话混进稿子里 */
+      .live {
+        display: none;
+        border-top: 1px solid rgba(255,255,255,.10);
+        background: rgba(59,130,246,.07);
+        padding: 6px 10px 7px;
+        flex: 0 0 auto;
+        max-height: 34%;
+        overflow: hidden;
+      }
+      .live.show { display: block; }
+      .live .live-label {
+        display: flex; align-items: center; gap: 5px;
+        font-size: .78em; letter-spacing: .04em;
+        color: #7ea6f5; margin-bottom: 2px;
+      }
+      .live .live-label i {
+        width: 5px; height: 5px; border-radius: 50%; background: #3b82f6;
+        animation: pulse 1s infinite; display: inline-block;
+      }
+      .live .live-text {
+        color: rgba(233,238,245,.78);
+        font-style: italic;
+        line-height: 1.55;
+        word-break: break-word;
+      }
+
       .warn {
         display: none;
         padding: 5px 10px;
@@ -338,6 +379,19 @@
     tailText.textContent = '识别中…';
     tail.append(tailDot, tailText);
 
+    // 「生成中」栏：只放还没定稿的那句，和正文分开
+    const live = document.createElement('div');
+    live.className = 'live';
+    const liveLabel = document.createElement('div');
+    liveLabel.className = 'live-label';
+    const liveDot = document.createElement('i');
+    const liveLabelText = document.createElement('span');
+    liveLabelText.textContent = '生成中';
+    liveLabel.append(liveDot, liveLabelText);
+    const liveText = document.createElement('div');
+    liveText.className = 'live-text';
+    live.append(liveLabel, liveText);
+
     const where = document.createElement('div');
     where.className = 'where';
     const whereCount = document.createElement('span');
@@ -348,7 +402,7 @@
     warn.className = 'warn';
     warn.textContent = '⚠ 捕获到的音频是静音：这一页可能被暂停或静音了';
 
-    panel.append(head, warn, body, where);
+    panel.append(head, warn, body, live, where);
     root.append(style, panel);
     document.addEventListener('fullscreenchange', mount, true);
     document.addEventListener('webkitfullscreenchange', mount, true);
@@ -382,7 +436,7 @@
       ro.observe(panel);
     }
 
-    parts = { panel, dot, time, model, body, empty, tail, whereCount, whereMode, latestBtn, warn };
+    parts = { panel, dot, time, model, body, empty, tail, live, liveText, whereCount, whereMode, latestBtn, warn };
     wrap = panel;
 
     mount();
@@ -572,25 +626,31 @@
       rowEls.set(item.index, row);
     }
 
-    // 增量识别的临时预览：这一句还没说完，先显示个大概
-    if (partial?.text) {
-      const row = document.createElement('div');
-      row.className = 'row partial';
-
-      const t = document.createElement('span');
-      t.className = 't';
-      t.textContent = fmtClock((partial.startMs || 0) / 1000);
-
-      const s = document.createElement('span');
-      s.className = 's';
-      s.textContent = `${partial.text}…`;
-
-      row.append(t, s);
-      frag.appendChild(row);
-    }
+    // 未定稿的那句不混进正文，统一放到独立的「生成中」栏（见 updateLive）
 
     frag.appendChild(parts.tail);
     body.appendChild(frag);
+  }
+
+  /** 「生成中」栏：显示还没定稿的那句；没有就按状态显示占位或隐藏 */
+  function updateLive(partial) {
+    const area = parts.live;
+    if (!area) return;
+    const text = (partial?.text || '').trim();
+    const live = !!session && ACTIVE.has(session.status);
+
+    if (text) {
+      parts.liveText.textContent = `${text}…`;
+      area.classList.add('show');
+      return;
+    }
+    if (live) {
+      parts.liveText.textContent = '正在聆听…';
+      area.classList.add('show');
+      return;
+    }
+    parts.liveText.textContent = '';
+    area.classList.remove('show');
   }
 
   function updateHighlight() {
@@ -683,12 +743,17 @@
 
     updateHighlight();
 
+    // 「生成中」独立一栏，始终同步
+    updateLive(partial);
+
     parts.whereCount.textContent = `${items.length} 句 / ${items.reduce((n, s) => n + s.text.length, 0)} 字`;
     parts.whereMode.textContent = active ? '录制中' : '已停止';
 
     updateBadge();
 
-    if (active) {
+    // forced：被「显示到页面」显式唤起。即使已停止，也要跑 ticker，
+    // 否则拖动/播放视频时高亮不会更新。
+    if (active || forced) {
       startTicker();
     } else {
       stopTicker();
@@ -723,8 +788,12 @@
         if (curIndex != null && curIndex !== lastCurIndex && followLatest) scrollToBottom();
         lastCurIndex = curIndex;
       } else {
+        // 已停止但还在看（例如整段提取后拖时间轴）：也要跟着视频时间刷高亮
+        ensureMapping(session.segments || []);
+        const { curIndex } = updateHighlight();
+        if (curIndex != null && curIndex !== lastCurIndex && followLatest) scrollToBottom();
+        lastCurIndex = curIndex;
         updateBadge();
-        render();
       }
     }, 250);
   }
@@ -898,3 +967,6 @@
     }
   }
 })();
+
+
+
