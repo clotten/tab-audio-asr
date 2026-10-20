@@ -529,6 +529,7 @@ tab-audio-asr/
 
 ```powershell
 & node tools/check-vendor.mjs
+& node tools/lint-csp.mjs
 & node tools/lint-offscreen-apis.mjs
 & node tools/test-vad.mjs
 & node tools/test-stream.mjs
@@ -746,4 +747,5 @@ $env:SILICONFLOW_API_KEY_FILE="C:\...\.siliconflow-key"
 
 分组判据：**"每次都要点"的放转录页，"改一次就不动"的放设置页**；
 设置页的操作按钮必须**吸顶**，因为它的使用路径永远是"改 → 立刻保存"。
+
 
