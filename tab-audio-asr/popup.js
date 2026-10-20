@@ -118,7 +118,6 @@ function bindEvents() {
   });
 
   // 字幕开关要"立刻"生效：内容脚本监听 storage 变化，这里直接存
-  el('subtitleEnabled').addEventListener('change', () => saveSettings(readForm()));
   el('subtitleFontSize').addEventListener('change', () => saveSettings(readForm()));
   el('mutePlayback').addEventListener('change', () => saveSettings(readForm()));
   el('saveAudio').addEventListener('change', () => saveSettings(readForm()));
@@ -617,7 +616,6 @@ function fillForm() {
   el('glossary').placeholder = GLOSSARY_FORMAT_HINT;
 
   const sub = { ...DEFAULTS.subtitle, ...(settings.subtitle || {}) };
-  el('subtitleEnabled').checked = sub.enabled !== false;
   el('subtitleFontSize').value = sub.fontSize || DEFAULTS.subtitle.fontSize;
   el('mutePlayback').checked = !!settings.mutePlayback;
   el('saveAudio').checked = !!settings.saveAudio;
@@ -644,7 +642,8 @@ function readForm() {
     prescanRate: Math.min(2, Math.max(1, Number(rate.toFixed(1)))),
     subtitle: {
       ...(settings.subtitle || {}),
-      enabled: el('subtitleEnabled').checked,
+      // 开关不放在设置页：点「显示字幕」置真，面板右上角 × 置假
+      enabled: (settings.subtitle?.enabled ?? true) !== false,
       fontSize: Math.min(48, Math.max(12, Math.round(fontSize)))
     }
   };
@@ -748,6 +747,16 @@ function pickMediaUrl(report) {
 
 /** 把当前稿子显示到视频页面（不重新识别），整段提取完或旧会话都能用 */
 async function showPanel() {
+  // 面板显示开关已不放在设置页：点「显示字幕」就把它置真
+  // （面板右上角 × 会把它置假，等价于"关掉字幕"）
+  try {
+    const { asrSettings } = await chrome.storage.local.get('asrSettings');
+    const sub = { ...(asrSettings?.subtitle || {}), enabled: true };
+    await chrome.storage.local.set({ asrSettings: { ...(asrSettings || {}), subtitle: sub } });
+  } catch {
+    /* 置真失败也不挡注入 */
+  }
+
   const res = await chrome.runtime.sendMessage({ type: 'SHOW_PANEL', tabId: activeTab?.id }).catch((err) => ({
     ok: false,
     error: String(err?.message || err)
@@ -1104,6 +1113,7 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
 
 
 
