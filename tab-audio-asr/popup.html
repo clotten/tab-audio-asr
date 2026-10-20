@@ -41,6 +41,7 @@
           <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
           <span class="mini" id="prescanHint"></span>
         </div>
+        <p class="note" id="runNote"></p>
       </section>
 
       <section class="card">
@@ -79,14 +80,6 @@
         <button class="btn" id="vadTestBtn" title="检查 Silero VAD 的运行时/模型是否正常">VAD 自检</button>
       </div>
       <p class="note" id="settingsNote"></p>
-
-      <section class="card">
-        <p class="sectLabel">接口</p>
-        <label>API Key<input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
-        <label>模型名<input id="model" type="text" spellcheck="false" /></label>
-        <label>接口地址<input id="baseUrl" type="text" spellcheck="false" /></label>
-        <label>纠错模型（事后校正用的对话模型）<input id="correctModel" type="text" spellcheck="false" /></label>
-      </section>
 
       <section class="card">
         <p class="sectLabel">显示</p>
@@ -128,6 +121,15 @@
         <label>一行一条；<code>错=>对</code> 会本地即时替换，其余作为纠错提示
           <textarea id="glossary" rows="6" spellcheck="false"></textarea>
         </label>
+      </section>
+
+      <!-- 接口放最后：填一次基本不再动 -->
+      <section class="card">
+        <p class="sectLabel">接口</p>
+        <label>API Key<input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
+        <label>模型名<input id="model" type="text" spellcheck="false" /></label>
+        <label>接口地址<input id="baseUrl" type="text" spellcheck="false" /></label>
+        <label>纠错模型（事后校正用的对话模型）<input id="correctModel" type="text" spellcheck="false" /></label>
       </section>
     </section>
 

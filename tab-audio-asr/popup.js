@@ -1107,11 +1107,19 @@ function safeName(name) {
 /* ------------------------------ 杂项 ------------------------------ */
 
 function note(text, kind = '') {
-  const box = el('settingsNote');
-  box.textContent = text;
-  box.className = 'note' + (kind ? ' ' + kind : '');
-  el('hint').textContent = text;
+  // 写到**当前标签页自己的**提示区（转录页 runNote / 设置页 settingsNote）；
+  // 之前两页共用一处，导致一条消息两个页面都能看到。
+  const box = el(currentTab === 'cfg' ? 'settingsNote' : 'runNote');
+  if (box) {
+    box.textContent = text;
+    box.className = 'note' + (kind ? ' ' + kind : '');
+  }
+
+  // 页脚只放短状态，太长就截断，免得把界面撑开
+  const hint = el('hint');
+  if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
 
 
 
