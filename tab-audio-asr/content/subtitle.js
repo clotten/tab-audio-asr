@@ -417,6 +417,10 @@
           scrollToRow(lastCurIndex);
           return;
         }
+        // 静态稿但还没有"当前句"（视频没播到任何句子）→ 停在顶部
+        parts.body.scrollTop = 0;
+        scrollGuardUntil = Date.now() + 500;
+        return;
       }
       scrollToBottom();
     });
@@ -689,10 +693,11 @@
     const er = el.getBoundingClientRect();
     if (!br.height) return;
 
-    // 已经完整可见就别动，避免每 250ms 抖一下
-    if (er.top >= br.top + 4 && er.bottom <= br.bottom - 4) return;
-
+    // 目标：把这一行放到可视区**正中**。
+    // 注意别用"已经可见就跳过"——行刚滚到底边时也算可见，结果永远不居中。
     const delta = er.top - br.top - (br.height - er.height) / 2;
+    if (Math.abs(delta) < 6) return; // 已经在中间了，别抖
+
     const max = Math.max(0, body.scrollHeight - body.clientHeight);
     scrollGuardUntil = Date.now() + 500;
     body.scrollTop = Math.max(0, Math.min(body.scrollTop + delta, max));
@@ -942,10 +947,14 @@
         }
         lastCurIndex = curIndex;
       } else {
-        // 已停止但还在看（例如整段提取后拖时间轴）：也要跟着视频时间刷高亮
+        // 已停止但还在看（例如整段提取后拖时间轴）：也要跟着视频时间刷高亮。
+        // 滚动目标同样交给模式——静态稿要滚到当前句（居中），不是滚到底部。
         ensureMapping(session.segments || []);
         const { curIndex } = updateHighlight();
-        if (curIndex != null && curIndex !== lastCurIndex && followLatest) scrollToBottom();
+        if (curIndex != null && curIndex !== lastCurIndex && followLatest) {
+          if (resolveMode().scrollTarget === 'current') scrollToRow(curIndex);
+          else scrollToBottom();
+        }
         lastCurIndex = curIndex;
         updateBadge();
       }

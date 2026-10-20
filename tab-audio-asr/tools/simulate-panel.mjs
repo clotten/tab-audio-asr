@@ -1,4 +1,4 @@
-﻿/**
+/**
  * simulate-panel.mjs —— 用最小 DOM 桩把 content/subtitle.js 真跑一遍
  *
  * 面板跑在网页里，普通单测覆盖不到。这里手写一个够用的假 DOM
@@ -472,6 +472,22 @@ console.log('\n10) 静态稿（整段提取）按视频时间轴高亮');
   await sleep(200);
 }
 
+
+/* ============================ 源码不变式 ============================ */
+// 这几轮反复出同一类 bug：某条分支忘了按模式决定滚动目标，于是静态稿被滚到底部。
+// 用源码级断言钉死：所有"滚动到哪"的决定都必须经过 resolveMode()。
+console.log('\n11) 源码不变式：滚动目标必须由模式决定');
+{
+  const src = readFileSync(new URL('../content/subtitle.js', import.meta.url), 'utf8');
+
+  const modeChecks = (src.match(/scrollTarget === 'current'/g) || []).length;
+  check('按模式判断滚动目标的地方 ≥ 4 处', modeChecks >= 4, `实际 ${modeChecks} 处`);
+
+  // 禁止 "if (条件) scrollToBottom();" 这种绕过模式的一行式分叉。
+  // （`else scrollToBottom();` 是模式判断的另一侧，属于正确写法，不在禁止范围）
+  const bare = /if \([^)]*\) scrollToBottom\(\);/.test(src);
+  check('没有绕过模式的 if (...) scrollToBottom()', !bare, '发现了裸分叉');
+}
 console.log('');
 if (failed) {
   console.log(`${failed} 项失败`);
