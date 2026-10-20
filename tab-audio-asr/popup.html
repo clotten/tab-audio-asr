@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -39,12 +39,20 @@
         <div class="rowActions">
           <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
           <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
+          <button class="btn" id="showPanelBtn" title="把当前这份稿子显示到视频页面上（不重新识别）">显示字幕</button>
           <span class="mini" id="prescanHint"></span>
         </div>
         <p class="note" id="runNote"></p>
       </section>
 
       <section class="card">
+        <div class="rowActions">
+          <select id="libSelect" title="字幕库：按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
+            <option value="">字幕库（空）</option>
+          </select>
+          <button class="btn" id="libLoadBtn">加载</button>
+          <button class="btn ghost" id="libDelBtn">删除</button>
+        </div>
         <div class="resultHead">
           <span>文字稿</span>
           <span id="counts">0 段 / 0 字</span>
@@ -54,19 +62,10 @@
           <button class="btn" id="copyBtn">复制全文</button>
           <button class="btn" id="txtBtn">导出 TXT</button>
           <button class="btn" id="srtBtn">导出 SRT</button>
-          <button class="btn" id="correctBtn" title="把整段稿子交给对话模型，按术语表纠正同音错字">校正全文</button>
           <button class="btn" id="refineBtn" title="用保存的 WAV 按 20 秒上下文重新识别一遍（准得多，但耗时几分钟）">离线精校</button>
           <button class="btn" id="saveAudioBtn" title="下载这次录到的 WAV 音频">保存音频</button>
-          <button class="btn" id="showPanelBtn" title="把当前这份稿子显示到视频页面上（不重新识别）">显示到页面</button>
           <button class="btn" id="historyBtn" hidden title="把上一份被覆盖或清空的稿子找回来">恢复上一份</button>
           <button class="btn ghost" id="resetBtn">清空</button>
-        </div>
-        <div class="rowActions">
-          <select id="libSelect" title="字幕库：按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
-            <option value="">字幕库（空）</option>
-          </select>
-          <button class="btn" id="libLoadBtn">加载</button>
-          <button class="btn ghost" id="libDelBtn">删除</button>
         </div>
       </section>
     </section>

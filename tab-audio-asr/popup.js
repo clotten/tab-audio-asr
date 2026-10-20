@@ -109,7 +109,6 @@ function bindEvents() {
   el('libLoadBtn').addEventListener('click', loadFromLibrary);
   el('libDelBtn').addEventListener('click', removeFromLibrary);
   el('showPanelBtn').addEventListener('click', showPanel);
-  el('correctBtn').addEventListener('click', correctAll);
   el('refineBtn').addEventListener('click', refineAll);
   el('saveAudioBtn').addEventListener('click', saveRecording);
   el('prescanBtn').addEventListener('click', startPrescan);
@@ -129,36 +128,8 @@ function bindEvents() {
   el('prescanRate').addEventListener('change', () => saveSettings(readForm()));
 }
 
-/* ------------------------------ 校正全文 ------------------------------ */
-
-async function correctAll() {
-  if (!settings.apiKey) {
-    showTab('cfg');
-    return note('先填 API Key。', 'err');
-  }
-
-  const btn = el('correctBtn');
-  btn.disabled = true;
-  btn.textContent = '校正中…';
-  note('正在把整段稿子交给模型校正（每 40 句一次请求）…');
-
-  let res;
-  try {
-    res = await chrome.runtime.sendMessage({ type: 'CORRECT_ALL' });
-  } catch (err) {
-    res = { ok: false, error: String(err?.message || err) };
-  }
-
-  btn.disabled = false;
-  btn.textContent = '校正全文';
-
-  if (!res?.ok) return note(`校正失败：${res?.error || '未知错误'}`, 'err');
-
-  note(`校正完成：检查 ${res.corrected} 句，改动 ${res.changed} 句（模型 ${res.model}）`, 'ok');
-  const { asrSession } = await chrome.storage.local.get('asrSession');
-  session = asrSession || session;
-  render();
-}
+/* 「校正全文」按钮已移除（用户只需要「整段提取」自动带的纠错和「离线精校」）；
+   后端 CORRECT_ALL 仍保留给 离线精校 内部使用。 */
 
 /* ------------------------------ 离线精校 ------------------------------ */
 
