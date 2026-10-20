@@ -391,6 +391,16 @@ async function fakeFetch(url, init) {
     };
   }
 
+  // 直链媒体（整段提取用）：返回一段可解码的假数据
+  if (String(url).includes(".mp4") || String(url).includes(".m4a")) {
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      arrayBuffer: async () => new ArrayBuffer(4096)
+    };
+  }
+
   if (String(url).includes('/chat/completions')) {
     let content = '';
     try {
@@ -850,6 +860,41 @@ console.log('\n15) VAD 自检按钮');
   ortFailMode = false;
 }
 
+console.log('\n16) 整段提取（直链 MP4）：不用播放就能出全稿');
+{
+  // 弹窗会先探测拿到直链，这里直接喂给 offscreen
+  decoderMode = 'speech'; // 复用已有桩：8 秒里两段 3 秒说话
+  const before = (store.get('asrSession')?.segments || []).length;
+  const res = await bus.send('popup', { type: 'INGEST_URL', url: 'https://cdn.example.com/lecture.mp4?auth_key=sim' });
+  check('立刻返回（不阻塞等下载）', res?.ok === true && res.started === true, JSON.stringify(res));
+
+  // 等它跑完（假解码 20 秒音频、假识别瞬间返回）
+  let done = false;
+  for (let i = 0; i < 100 && !done; i++) {
+    await sleep(100);
+    const d = store.get('asrSession')?.diag || {};
+    done = d.ingestPhase === 'done' || d.ingestPhase === 'error';
+  }
+
+  session = store.get('asrSession');
+  const diag = session?.diag || {};
+  check('提取完成', diag.ingestPhase === 'done', JSON.stringify(diag).slice(0, 200));
+  check('记录了解码时长', (diag.ingestDurationMs || 0) >= 7000, String(diag.ingestDurationMs));
+  check('识别出了句子', (session?.segments || []).length > 0, String((session?.segments || []).length));
+  check(
+    '时间轴从 0 开始且单调递增',
+    (session?.segments || []).every((s, i, arr) => (i === 0 ? s.startMs >= 0 : s.startMs >= arr[i - 1].startMs)),
+    JSON.stringify((session?.segments || []).map((s) => s.startMs))
+  );
+  check('会话标记为已停止', session?.status === 'stopped', session?.status);
+  check('自动跑了纠错', !!diag.ingestCorrection, JSON.stringify(diag.ingestCorrection));
+
+  // 错误路径：非 http 链接应直接拒绝
+  decoderMode = 'silence';
+  const bad = await bus.send('popup', { type: 'INGEST_URL', url: 'blob:https://x/abc' });
+  check('blob: 链接被拒绝', bad?.ok === false && /http/i.test(bad.error || ''), JSON.stringify(bad));
+}
+
 console.log('\n6) 越界检查');
 const badMessages = bus.log.filter((m) => m.type === 'STATE_SET' && m.to !== 'sw');
 check('STATE_SET 全部走 SW', badMessages.length === 0, JSON.stringify(badMessages));
@@ -861,6 +906,8 @@ if (failed) {
 }
 console.log('全部通过：消息流、状态落盘、分段上传、停止/清空都正常。');
 process.exit(0);
+
+
 
 
 

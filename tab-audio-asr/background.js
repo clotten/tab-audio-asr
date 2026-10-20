@@ -1,4 +1,4 @@
-/**
+﻿/**
  * background.js —— MV3 Service Worker
  *
  * 职责很窄，只做三件事：
@@ -354,6 +354,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
 
+        case 'INGEST_URL': {
+          const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url }).catch((err) => ({
+            ok: false,
+            error: `后台页面未响应：${String(err?.message || err)}`
+          }));
+          sendResponse(res || { ok: false, error: '没有响应' });
+          break;
+        }
+
         case 'VAD_SELFTEST': {
           const res = await callOffscreenTask({ type: 'VAD_SELFTEST' }).catch((err) => ({
             ok: false,
@@ -412,3 +421,4 @@ chrome.runtime.onStartup.addListener(async () => {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+

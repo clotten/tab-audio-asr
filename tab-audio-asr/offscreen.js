@@ -1109,6 +1109,197 @@ function wavToSamples(arrayBuffer) {
  *   离线（20 秒上下文）：81 句 / 1893 字，"帧"对 51 次，"针/真/贞"只错 2 次
  * 差别全在上下文长度上。
  */
+/**
+ * 把一段完整的 16k 单声道 PCM 按窗口切句后逐段转写。
+ * 「离线精校」和「整段提取」共用这一条路——两者的差别只在音频从哪来。
+ */
+async function transcribeWindowed(samples, { maxRegionMs = 20000, onProgress } = {}) {
+  const total = samples.length;
+  const winSamples = REFINE_WINDOW_SEC * TARGET_RATE;
+  const out = [];
+
+  for (let start = 0; start < total; start += winSamples) {
+    const end = Math.min(total, start + winSamples);
+    const window = samples.subarray(start, end);
+
+    // 每个窗口内再按能量切句：窗口 3 分钟是为了不让单次切句的内存无限涨
+    const regions = detectSpeechRegions(window, TARGET_RATE, {
+      maxRegionMs,
+      targetMinMs: 3000,
+      minGapMs: 700,
+      maxJoinGapMs: 2500
+    });
+
+    for (const region of regions) {
+      const absStartMs = Math.round((start / TARGET_RATE) * 1000) + region.startMs;
+      const slice = window.subarray(region.startSample, region.endSample);
+      const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
+
+      let raw = '';
+      try {
+        raw = await callTranscribe(wav, out.length);
+      } catch (err) {
+        noteError(`第 ${out.length + 1} 段失败：${err?.message || err}`);
+        continue;
+      }
+
+      const text = acceptText(raw, region.durationMs);
+      if (!text) continue;
+
+      out.push({
+        index: out.length,
+        startMs: absStartMs,
+        durationMs: region.durationMs,
+        status: 'done',
+        text,
+        raw,
+        bytes: wav.size
+      });
+
+      if (onProgress) await onProgress(out.length);
+    }
+
+    if (onProgress) await onProgress(out.length);
+  }
+
+  return out;
+}
+
+/* ---------------------------- 整段提取（直链） ---------------------------- */
+
+/** 单个媒体文件的上限：超过就别在浏览器里解码了，改用实时录制 */
+const INGEST_MAX_BYTES = 600 * 1024 * 1024;
+const INGEST_MAX_SECONDS = 45 * 60;
+
+/**
+ * 从直链媒体整段提取字幕——**不用等播放**。
+ *
+ * 这是 tabCapture 之外的回头路：页面里的媒体如果是直链 MP4/m4a/MP3，
+ * 就没必要"录声音"，直接把文件下载下来解码、整段转写，播放前就能拿到全稿。
+ * 时间轴天然对齐（相对文件开头），比录制推算更准。
+ */
+function startIngest(url) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
+  if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
+  if (state?.diag?.ingesting) return { ok: false, error: '正在整段提取中，等它跑完再点' };
+
+  if (!state || state.status === 'stopped' || state.status === 'error') {
+    state = {
+      status: 'processing',
+      tabId: null,
+      tabTitle: '',
+      startedAt: Date.now(),
+      stoppedAt: null,
+      segments: [],
+      transcript: '',
+      pending: 0,
+      done: 0,
+      failed: 0,
+      skipped: 0,
+      segSeconds: settings.segmentSeconds,
+      maxChunkMs: settings.maxChunkMs || DEFAULTS.maxChunkMs,
+      model: settings.model,
+      lastError: '',
+      monitorMuted: false,
+      mutedPlayback: false,
+      partial: null,
+      diag: {}
+    };
+  }
+
+  state.status = 'processing';
+  state.diag = state.diag || {};
+  state.diag.ingesting = true;
+  state.diag.ingestPhase = 'download';
+  state.diag.ingestBytes = 0;
+  state.diag.ingestDone = 0;
+  state.diag.ingestError = '';
+  state.diag.ingestUrl = target.slice(0, 300);
+  saveState();
+
+  runIngest(target).catch(() => {});
+
+  return { ok: true, started: true };
+}
+
+async function runIngest(url) {
+  const t0 = Date.now();
+  try {
+    /* --- 1. 下载 --- */
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
+
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > INGEST_MAX_BYTES) {
+      throw new Error(`文件太大（${Math.round(buf.byteLength / 1048576)}MB），改用实时录制`);
+    }
+    state.diag.ingestBytes = buf.byteLength;
+    state.diag.ingestPhase = 'decode';
+    await saveState();
+
+    /* --- 2. 解码（浏览器自带的解码器，不需要额外依赖）--- */
+    const ctx = new AudioContext();
+    let audio;
+    try {
+      audio = await ctx.decodeAudioData(buf);
+    } catch (err) {
+      throw new Error(`解码失败（可能不是 mp4/mp3/m4a）：${err?.message || err}`);
+    }
+
+    if (!Number.isFinite(audio.duration) || !audio.duration) {
+      await ctx.close().catch(() => {});
+      throw new Error('解码后拿不到时长');
+    }
+    if (audio.duration > INGEST_MAX_SECONDS) {
+      await ctx.close().catch(() => {});
+      throw new Error(`音频 ${Math.round(audio.duration / 60)} 分钟，超过 45 分钟上限，改用实时录制`);
+    }
+
+    const mono = mixToMono(audio);
+    const samples = audio.sampleRate === TARGET_RATE ? mono : resampleBox(mono, audio.sampleRate, TARGET_RATE);
+    await ctx.close().catch(() => {});
+
+    state.diag.ingestDurationMs = Math.round(audio.duration * 1000);
+    state.diag.ingestPhase = 'transcribe';
+    await saveState();
+
+    /* --- 3. 整段转写 --- */
+    const items = await transcribeWindowed(samples, {
+      onProgress: async (count) => {
+        state.diag.ingestDone = count;
+        await saveState();
+      }
+    });
+
+    if (!items.length) throw new Error('没有识别出任何内容（可能整段都是音乐）');
+
+    state.segments = items;
+    state.status = 'stopped';
+    state.stoppedAt = Date.now();
+    state.diag.ingesting = false;
+    state.diag.ingestPhase = 'done';
+    state.diag.ingestMs = Date.now() - t0;
+    await saveState();
+
+    /* --- 4. 顺手整段纠错 --- */
+    const correction = await handleCorrectAll().catch((err) => ({ ok: false, error: String(err) }));
+    state.diag.ingestCorrection = correction?.ok
+      ? { changed: correction.changed, total: correction.corrected }
+      : { error: correction?.error || '纠错未执行' };
+    await saveState();
+  } catch (err) {
+    if (state) {
+      state.diag.ingesting = false;
+      state.diag.ingestPhase = 'error';
+      state.diag.ingestError = String(err?.message || err).slice(0, 300);
+      if (state.status === 'processing') state.status = 'stopped';
+      state.stoppedAt = state.stoppedAt || Date.now();
+      await saveState().catch(() => {});
+    }
+  }
+}
+
 async function handleRefine() {
   if (!state) return { ok: false, error: '还没有会话' };
   if (state.diag?.refining) return { ok: false, error: '正在精校中' };
@@ -1136,56 +1327,16 @@ async function handleRefine() {
   let samples = parsed.samples;
   if (parsed.rate !== TARGET_RATE) samples = resampleBox(samples, parsed.rate, TARGET_RATE);
 
-  const total = samples.length;
-  const winSamples = REFINE_WINDOW_SEC * TARGET_RATE;
-
   state.diag.refining = true;
   state.diag.refineDone = 0;
   await saveState();
 
-  const refined = [];
-
-  for (let start = 0; start < total; start += winSamples) {
-    const end = Math.min(total, start + winSamples);
-    const window = samples.subarray(start, end);
-
-    const regions = detectSpeechRegions(window, TARGET_RATE, {
-      maxRegionMs: 20000,
-      targetMinMs: 3000,
-      minGapMs: 700,
-      maxJoinGapMs: 2500
-    });
-
-    for (const region of regions) {
-      const absStartMs = Math.round((start / TARGET_RATE) * 1000) + region.startMs;
-      const slice = window.subarray(region.startSample, region.endSample);
-      const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
-
-      let raw = '';
-      try {
-        raw = await callTranscribe(wav, refined.length);
-      } catch (err) {
-        noteError(`精校第 ${refined.length + 1} 段失败：${err?.message || err}`);
-        continue;
-      }
-
-      const text = acceptText(raw, region.durationMs);
-      if (!text) continue;
-
-      refined.push({
-        index: refined.length,
-        startMs: absStartMs,
-        durationMs: region.durationMs,
-        status: 'done',
-        text,
-        raw,
-        bytes: wav.size
-      });
+  const refined = await transcribeWindowed(samples, {
+    onProgress: async (count) => {
+      state.diag.refineDone = count;
+      await saveState();
     }
-
-    state.diag.refineDone = refined.length;
-    await saveState();
-  }
+  });
 
   // 用精校结果整体替换实时结果
   state.segments = refined;
@@ -1505,6 +1656,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await handleRefine());
           break;
 
+        case 'INGEST_URL':
+          // 直链整段提取：立刻返回，进度靠 state.diag 推给弹窗
+          sendResponse(startIngest(msg.url));
+          break;
+
         case 'VAD_SELFTEST':
           sendResponse(await handleVadSelftest());
           break;
@@ -1528,6 +1684,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
+
+
+
 
 
 

@@ -29,6 +29,8 @@ const el = (id) => document.getElementById(id);
 
 let settings = { ...DEFAULTS };
 let session = null;
+let lastProbe = null;
+let lastMediaUrl = '';
 let activeTab = null;
 let ticker = null;
 let busy = false;
@@ -76,6 +78,7 @@ function bindEvents() {
   el('testBtn').addEventListener('click', testApi);
   el('vadTestBtn').addEventListener('click', vadSelftest);
   el('probeBtn').addEventListener('click', probeMedia);
+  el('ingestBtn').addEventListener('click', ingestFromPage);
   el('copyBtn').addEventListener('click', copyAll);
   el('txtBtn').addEventListener('click', exportTxt);
   el('srtBtn').addEventListener('click', exportSrt);
@@ -429,7 +432,14 @@ function renderProgress() {
       session.diag.vad === 'silero' ? 'Silero VAD' : session.diag.vad === 'loading' ? 'Silero 加载中…' : '能量 VAD'
     );
   }
-  if (session.diag?.vadError) bits.push(`VAD 回退：${session.diag.vadError}`);
+  if (session.diag?.ingesting) {
+    const phase = { download: '下载中', decode: '解码中', transcribe: '转写中' }[session.diag.ingestPhase] || session.diag.ingestPhase;
+    bits.push(`整段提取：${phase} ${session.diag.ingestDone || 0} 段`);
+  } else if (session.diag?.ingestPhase === 'done') {
+    bits.push(`整段提取完成：${(session.segments || []).length} 句 / ${Math.round((session.diag.ingestMs || 0) / 1000)}s`);
+  } else if (session.diag?.ingestPhase === 'error') {
+    bits.push(`整段提取失败：${session.diag.ingestError}`);
+  }  if (session.diag?.vadError) bits.push(`VAD 回退：${session.diag.vadError}`);
   if (session.diag?.silent) bits.push('⚠ 捕获静音（页面可能被暂停/静音）');
 
   box.className = 'meta';
@@ -640,6 +650,75 @@ async function ensureHostPermission(baseUrl) {
   }
 }
 
+/* ------------------------------ 整段提取（直链） ------------------------------ */
+
+/**
+ * 直链媒体整段提取：不用等播放。
+ *
+ * 流程：探测拿到直链 → offscreen 下载 → 浏览器解码 → 16k 单声道 → 窗口化转写 → 纠错。
+ * 进度靠 session.diag.ingest* 推回来，所以这里只负责发指令和提示。
+ */
+async function ingestFromPage() {
+  const btn = el('ingestBtn');
+  btn.disabled = true;
+  btn.textContent = '准备中…';
+
+  try {
+    let url = lastMediaUrl;
+
+    // 没探测过就先探一次，省得用户多点一下
+    if (!url) {
+      note('先探测页面，找可下载的媒体链接…');
+      const probe = await chrome.runtime.sendMessage({ type: 'PROBE_MEDIA' }).catch((err) => ({
+        ok: false,
+        error: String(err?.message || err)
+      }));
+      if (!probe?.ok) return note(`探测失败：${probe?.error || '未知'}`, 'err');
+
+      lastProbe = probe.report || null;
+      url = pickMediaUrl(lastProbe);
+      if (!url) {
+        return note(
+          '这个页面没找到可下载的直链（可能是 MSE/blob:）。\n先用「开始转录」实时录，或者点播放几秒后再点「探测本页媒体」。',
+          'err'
+        );
+      }
+    }
+
+    note(`开始整段提取：\n${url.slice(0, 120)}\n下载 → 解码 → 转写，进度会显示在下方。`);
+
+    const res = await chrome.runtime.sendMessage({ type: 'INGEST_URL', url }).catch((err) => ({
+      ok: false,
+      error: String(err?.message || err)
+    }));
+
+    if (!res?.ok) note(`整段提取没能开始：${res?.error || '未知错误'}`, 'err');
+    else note('已在后台开始整段提取，可以关掉弹窗，跑完会写进文字稿。');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '整段提取（不用等播放）';
+  }
+}
+
+/** 从探测报告里挑一个最像"可整段下载"的链接 */
+function pickMediaUrl(report) {
+  if (!report) return '';
+  const first = (arr) => (arr && arr.length ? arr[0].url || arr[0].src || '' : '');
+  const tracks = (report.tracks || []).map((t) => t.src).filter(Boolean);
+
+  // 直链 mp4/mp3/m4a 优先；其次 m3u8（后续可做分片拼接）；字幕轨先不算（要单独解析）
+  const direct = (report.videos || []).map((v) => v.src).find((s) => /^https?:/i.test(s) && !/\.m3u8|\.mpd/i.test(s));
+  return (
+    direct ||
+    first(report.media?.video) ||
+    first(report.media?.audio) ||
+    first(report.media?.hls) ||
+    first(report.media?.dash) ||
+    tracks[0] ||
+    ''
+  );
+}
+
 /* ------------------------------ 探测本页媒体 ------------------------------ */
 
 /**
@@ -666,6 +745,10 @@ async function probeMedia() {
 
   const r = res.report;
   if (!r) return note('探测没有返回结果（页面可能不允许注入脚本）', 'err');
+
+  // 记住探测结果：`整段提取` 直接用，不用再探一次
+  lastProbe = r;
+  lastMediaUrl = pickMediaUrl(r);
 
   const label =
     {
@@ -870,6 +953,8 @@ function note(text, kind = '') {
   box.className = 'note' + (kind ? ' ' + kind : '');
   el('hint').textContent = text;
 }
+
+
 
 
 

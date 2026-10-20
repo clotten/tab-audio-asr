@@ -1,4 +1,4 @@
-/**
+﻿/**
  * probe.js —— 探测当前页面能不能"整段提取"，而不是只能实时录
  *
  * 为什么需要它：实时录制受物理限制——声音必须先播出来才能录到。
@@ -81,7 +81,8 @@
     if (!name || seen.has(name)) continue;
 
     const ext = extOf(name);
-    if (SUBTITLE_EXT.includes(ext) || lower(name).includes('subtitle')) {
+    // 只认真正的字幕后缀：URL 里带 subtitle 字样的接口不算（之前误判过）
+    if (SUBTITLE_EXT.includes(ext)) {
       if (out.subtitles.length < 20) out.subtitles.push({ url: name, ext });
       continue;
     }
@@ -157,3 +158,4 @@
 
   return out;
 })();
+
