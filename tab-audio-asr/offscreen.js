@@ -18,6 +18,7 @@ import { looksLikeHallucination } from './lib/hallucination.js';
 import { createSileroVad, createSileroGate } from './lib/silero.js';
 import { planInterim, stripCommittedOverlap } from './lib/incremental.js';
 import { buildDoc } from './lib/docstore.js';
+import { normalizeVideoUrl } from './lib/videokey.js';
 import { detectSpeechRegions, createStreamingSegmenter } from './lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -1259,7 +1260,9 @@ function startIngest(url, videoKey) {
   state.diag.ingestDone = 0;
   state.diag.ingestError = '';
   state.diag.source = 'url'; // 标记：这份稿子来自直链整段提取（不是录制）
-  if (videoKey) state.videoKey = videoKey; // 这份稿子属于哪个视频（用于隔离）
+  // 这份稿子属于哪个视频（隔离 + 入库都用它）。
+  // 调用方没给就用媒体地址兜底——否则会「提取成功但字幕库是空的」（真机踩过）。
+  state.videoKey = videoKey || normalizeVideoUrl(target);
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 

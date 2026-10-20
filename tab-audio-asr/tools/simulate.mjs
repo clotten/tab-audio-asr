@@ -30,6 +30,7 @@ import { createWavWriter, readAudioFile } from '../lib/audiofile.js';
 import { createSileroVad, createSileroGate } from '../lib/silero.js';
 import { planInterim, stripCommittedOverlap } from '../lib/incremental.js';
 import { buildDoc, getDoc, upsertDoc, listDocs, removeDoc, sanitizeDocs } from '../lib/docstore.js';
+import { normalizeVideoUrl } from '../lib/videokey.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -503,6 +504,7 @@ const offscreenCtx = vm.createContext({
   planInterim,
   stripCommittedOverlap,
   buildDoc,
+  normalizeVideoUrl,
   // 注入时绑定假 OPFS：库代码里的 navigator 会解析到 Node 域的全局对象，
   // 必须由外层把 fakeStorage 闭包传进去
   createWavWriter: (name, rate) => createWavWriter(name, rate, fakeStorage),
@@ -881,7 +883,12 @@ console.log('\n16) 整段提取（直链 MP4）：不用播放就能出全稿');
   // 弹窗会先探测拿到直链，这里直接喂给 offscreen
   decoderMode = 'speech'; // 复用已有桩：8 秒里两段 3 秒说话
   const before = (store.get('asrSession')?.segments || []).length;
-  const res = await bus.send('popup', { type: 'INGEST_URL', url: 'https://cdn.example.com/lecture.mp4?auth_key=sim' });
+  // 真实环境里 popup 会带上 videoKey（URL 归一化 + 时长）；这里照做
+  const res = await bus.send('popup', {
+    type: 'INGEST_URL',
+    url: 'https://cdn.example.com/lecture.mp4?auth_key=sim',
+    videoKey: 'https://cdn.example.com/lecture.mp4#20s'
+  });
   check('立刻返回（不阻塞等下载）', res?.ok === true && res.started === true, JSON.stringify(res));
 
   // 等它跑完（假解码 20 秒音频、假识别瞬间返回）
@@ -890,6 +897,12 @@ console.log('\n16) 整段提取（直链 MP4）：不用播放就能出全稿');
     await sleep(100);
     const d = store.get('asrSession')?.diag || {};
     done = d.ingestPhase === 'done' || d.ingestPhase === 'error';
+
+  // 字幕库：提取完应该自动入库（这条就是真机上"库里空的"那一步）
+  await sleep(300);
+  const docs = store.get('asrDocs') || {};
+  check('提取结果进了字幕库', Object.keys(docs).length > 0, 'keys=' + JSON.stringify(Object.keys(docs)) + ' diag=' + JSON.stringify(session?.diag?.libraryError || session?.diag?.librarySaved));
+  check('入库的 key 带时长', Object.keys(docs).some((k) => k.includes('#')), JSON.stringify(Object.keys(docs)));
   }
 
   session = store.get('asrSession');
@@ -989,6 +1002,8 @@ if (failed) {
 }
 console.log('全部通过：消息流、状态落盘、分段上传、停止/清空都正常。');
 process.exit(0);
+
+
 
 
 

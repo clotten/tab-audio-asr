@@ -492,7 +492,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
 
         case 'INGEST_URL': {
-          const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url }).catch((err) => ({
+          // videoKey 必须一起转：offscreen 靠它决定「这份稿子属于哪个视频」并入库
+          const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url, videoKey: msg.videoKey }).catch((err) => ({
             ok: false,
             error: `后台页面未响应：${String(err?.message || err)}`
           }));
