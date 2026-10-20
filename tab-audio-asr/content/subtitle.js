@@ -234,6 +234,7 @@
       .btn.latest.show { display: inline-block; }
 
       .body {
+        position: relative; // 让子行的 offsetTop 有正确的参照
         flex: 1 1 auto;
         overflow-y: auto;
         overflow-x: hidden;
@@ -613,13 +614,27 @@
     return d?.source === 'url' || !!d?.ingestUrl;
   }
 
-  /** 把某一句滚到可视区中间（静态稿跟随播放用） */
+  /**
+   * 把某一句滚到可视区中间（静态稿跟随播放用）。
+   * 用 getBoundingClientRect 而不是 offsetTop——offsetTop 依赖"最近的定位祖先"，
+   * 布局里没有定位元素时会算成相对页面的大坐标，scrollTop 一 clamp 就跳到最后。
+   */
   function scrollToRow(index) {
     const el = rowEls.get(index);
     const body = parts.body;
     if (!el || !body) return;
-    const top = el.offsetTop - body.clientHeight / 2 + el.offsetHeight / 2;
-    body.scrollTop = Math.max(0, Math.min(top, body.scrollHeight - body.clientHeight));
+    if (typeof el.getBoundingClientRect !== 'function' || typeof body.getBoundingClientRect !== 'function') return;
+
+    const br = body.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    if (!br.height) return;
+
+    // 已经完整可见就别动，避免每 250ms 抖一下
+    if (er.top >= br.top + 4 && er.bottom <= br.bottom - 4) return;
+
+    const delta = er.top - br.top - (br.height - er.height) / 2;
+    const max = Math.max(0, body.scrollHeight - body.clientHeight);
+    body.scrollTop = Math.max(0, Math.min(body.scrollTop + delta, max));
   }
 
   function rebuildRows(items, partial) {
@@ -764,8 +779,32 @@
       lastSig = sig;
       const keepTop = parts.body.scrollTop;
       rebuildRows(items, partial);
-      if (followLatest) scrollToBottom();
-      else parts.body.scrollTop = keepTop;
+
+      // 静态稿（整段提取/导入）：定位到"视频当前播到的那一句"，
+      // 而不是滚到底部——否则一打开就跳到全文末尾，看着像错乱。
+      if (isStaticTranscript() && followLatest) {
+        const video = findVideo();
+        const t = video ? video.currentTime : null;
+        let target = null;
+        if (t != null) {
+          let bestStart = -Infinity;
+          for (const item of items) {
+            const start = mappedStart(item);
+            if (start == null) continue;
+            const end = start + Math.max(0.6, (item.durationMs || 0) / 1000);
+            if (t >= start - 0.25 && t < end && start > bestStart) {
+              bestStart = start;
+              target = item.index;
+            }
+          }
+        }
+        if (target != null) scrollToRow(target);
+        else scrollToBottom();
+      } else if (followLatest) {
+        scrollToBottom();
+      } else {
+        parts.body.scrollTop = keepTop;
+      }
     }
 
     updateHighlight();
@@ -1011,6 +1050,8 @@
     }
   }
 })();
+
+
 
 
 
