@@ -1,4 +1,4 @@
-/**
+﻿/**
  * simulate-panel.mjs —— 用最小 DOM 桩把 content/subtitle.js 真跑一遍
  *
  * 面板跑在网页里，普通单测覆盖不到。这里手写一个够用的假 DOM
@@ -180,7 +180,8 @@ const fakeDocument = {
   documentElement: new FakeEl('html'),
   fullscreenElement: null,
   addEventListener() {},
-  querySelectorAll: (sel) => (sel === 'video' ? [fakeVideo] : [])
+  querySelectorAll: (sel) => (sel === 'video' ? [fakeVideo] : []),
+  location: { href: 'https://course.example.com/lesson/1' }
 };
 
 /* ============================ 假 chrome.storage ============================ */
@@ -247,6 +248,7 @@ class FakeResizeObserver {
 }
 
 const ctx = vm.createContext({
+  location: { href: 'https://course.example.com/lesson/1' },
   chrome: chromeStub,
   console,
   setTimeout,
@@ -476,6 +478,21 @@ console.log('\n10) 静态稿（整段提取）按视频时间轴高亮');
 /* ============================ 源码不变式 ============================ */
 // 这几轮反复出同一类 bug：某条分支忘了按模式决定滚动目标，于是静态稿被滚到底部。
 // 用源码级断言钉死：所有"滚动到哪"的决定都必须经过 resolveMode()。
+
+console.log('\n12) 别的视频的稿子不显示在本页');
+{
+  const base = store.get('asrSession');
+  // 给会话打一个"别的视频"的标识
+  await chromeStub.storage.local.set({ asrSession: { ...base, videoKey: 'https://other.example.com/x#99s', status: 'stopped', stoppedAt: Date.now() } });
+  await sleep(250);
+
+  const body = getPanel().children.find((c) => c.classList.contains('body'));
+  const rows = body.children.filter((c) => c.className.includes('row'));
+  check('不显示其他视频的字幕行', rows.length === 0, 'rows=' + rows.length);
+
+  const empty = body.children.find((c) => c.classList.contains('empty'));
+  check('给出提示文案', (empty?.textContent || '').includes('别的文字稿') || (empty?.textContent || '').includes('本页还没有'), empty?.textContent);
+}
 console.log('\n11) 源码不变式：滚动目标必须由模式决定');
 {
   const src = readFileSync(new URL('../content/subtitle.js', import.meta.url), 'utf8');

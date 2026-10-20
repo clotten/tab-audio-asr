@@ -1178,7 +1178,7 @@ const INGEST_MAX_SECONDS = 45 * 60;
  * 就没必要"录声音"，直接把文件下载下来解码、整段转写，播放前就能拿到全稿。
  * 时间轴天然对齐（相对文件开头），比录制推算更准。
  */
-function startIngest(url) {
+function startIngest(url, videoKey) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
   if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
@@ -1216,6 +1216,7 @@ function startIngest(url) {
   state.diag.ingestDone = 0;
   state.diag.ingestError = '';
   state.diag.source = 'url'; // 标记：这份稿子来自直链整段提取（不是录制）
+  if (videoKey) state.videoKey = videoKey; // 这份稿子属于哪个视频（用于隔离）
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 
@@ -1659,7 +1660,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
         case 'INGEST_URL':
           // 直链整段提取：立刻返回，进度靠 state.diag 推给弹窗
-          sendResponse(startIngest(msg.url));
+          sendResponse(startIngest(msg.url, msg.videoKey));
           break;
 
         case 'VAD_SELFTEST':
@@ -1685,6 +1686,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
 
 
 

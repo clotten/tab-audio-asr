@@ -1,4 +1,4 @@
-/**
+﻿/**
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -74,6 +74,41 @@
   function resolveMode() {
     const d = session?.diag;
     return d?.source === 'url' || d?.ingestUrl ? MODES.staticDoc : MODES.live;
+  }
+
+  /* ---------------- 视频标识（字幕按视频隔离） ----------------
+   * 内容脚本不能用 import，所以这里内联一份最小实现；
+   * 真源在 lib/videokey.js（有 tools/test-videokey.mjs 覆盖），改一处要同步另一处。
+   */
+  const VOLATILE_PARAMS = /^(auth_?key|sign|signature|expires?|e|token|ts|timestamp|t|nonce|rand|utm_\w+|vd_source|from_source|referer)$/i;
+  const ID_PARAMS = /^(aid|bvid|vid|video_?id|cid|chapter|chapter_?id|node_?id|course_?id|lesson_?id|id|p)$/i;
+
+  function pageVideoKey() {
+    const video = findVideo();
+    const duration = video && Number.isFinite(video.duration) && video.duration > 0 ? Math.round(video.duration) : null;
+
+    let href = '';
+    try {
+      href = typeof location !== 'undefined' && location.href ? location.href : '';
+    } catch {
+      href = '';
+    }
+    let base = href;
+    try {
+      const u = new URL(href);
+      const keep = [];
+      for (const [k, v] of u.searchParams) {
+        if (VOLATILE_PARAMS.test(k)) continue;
+        if (ID_PARAMS.test(k)) keep.push(`${k}=${v}`);
+      }
+      const path = u.pathname.replace(/\/+$/, '');
+      const qs = keep.length ? '?' + keep.sort().join('&') : '';
+      base = u.origin + path + qs;
+    } catch {
+      /* URL 解析失败就用原串 */
+    }
+
+    return duration == null ? base : `${base}#${duration}s`;
   }
   const MAX_ROWS = 400;
 
@@ -836,20 +871,31 @@
     }
 
     wrap.classList.remove('hidden');
+    // 字幕必须按视频隔离：稿子属于别的视频时，一个字都不显示
+    const keyNow = pageVideoKey();
+    const foreign = !!session.videoKey && session.videoKey !== keyNow;
+    if (foreign) {
+      parts.empty.textContent = '本页还没有对应的文字稿（不显示其他视频的字幕）。在插件里点「整段提取」或「开始转录」。';
+    } else {
+      parts.empty.textContent = '正在聆听…';
+    }
     wrap.classList.toggle('stopped', !active);
     const silent = !!session?.diag?.silent;
     parts.warn.classList.toggle('show', silent);
     applyLayout();
 
-    const items = doneItems();
+    // 别的视频的稿子：一行都不显示，只留提示
+    const items = foreign ? [] : doneItems();
     ensureMapping(session.segments || []);
 
     parts.model.textContent = session.model || '';
 
     const last = items[items.length - 1];
-    const partial = session.partial && session.partial.text ? session.partial : null;
+    const partial = !foreign && session.partial && session.partial.text ? session.partial : null;
     const sig = [
-      // 会话身份：换了会话（重新提取/重新录制）必须重建，否则句数相同就会沿用旧行
+      // 会话身份 + 是否属于本页：换了会话/换了视频都必须重建，
+      // 否则句数相同就会沿用旧行（踩过）
+      foreign ? 'foreign' : 'own',
       session.startedAt || '-',
       resolveMode().sig(session),
       items.length,
@@ -1130,6 +1176,8 @@
     }
   }
 })();
+
+
 
 
 

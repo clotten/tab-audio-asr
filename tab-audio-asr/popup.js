@@ -5,6 +5,7 @@
 
 import { makeToneWav } from './lib/wav.js';
 import { GLOSSARY_FORMAT_HINT } from './lib/glossary.js';
+import { videoKeyOf } from './lib/videokey.js';
 import { readAudioFile, removeAudioFile } from './lib/audiofile.js';
 
 const DEFAULTS = {
@@ -703,10 +704,19 @@ async function ingestFromPage() {
 
     note(`开始整段提取：\n${url.slice(0, 120)}\n下载 → 解码 → 转写，进度会显示在下方。`);
 
-    const res = await chrome.runtime.sendMessage({ type: 'INGEST_URL', url, tabId: activeTab?.id }).catch((err) => ({
-      ok: false,
-      error: String(err?.message || err)
-    }));
+    // 字幕必须按视频隔离：把"这份稿子属于哪个视频"一起传下去，
+    // 否则换个视频会照样显示上一个视频的字幕（真实踩过）。
+    const videoKey = videoKeyOf({
+      href: lastProbe?.url || url,
+      duration: lastProbe?.videos?.find((v) => v.duration)?.duration
+    });
+
+    const res = await chrome.runtime
+      .sendMessage({ type: 'INGEST_URL', url, tabId: activeTab?.id, videoKey })
+      .catch((err) => ({
+        ok: false,
+        error: String(err?.message || err)
+      }));
 
     if (!res?.ok) note(`整段提取没能开始：${res?.error || '未知错误'}`, 'err');
     else note('已在后台开始整段提取，可以关掉弹窗，跑完会写进文字稿。');
@@ -1016,6 +1026,7 @@ function note(text, kind = '') {
   box.className = 'note' + (kind ? ' ' + kind : '');
   el('hint').textContent = text;
 }
+
 
 
 
