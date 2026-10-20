@@ -444,6 +444,14 @@ console.log('\n10) 静态稿（整段提取）按视频时间轴高亮');
   const cur2 = body.children.filter((c) => c.className.includes('row') && c.classList.contains('cur'));
   check('拖动后高亮跟着换', (cur2[0]?.children[1]?.textContent || '').includes('第三句'), cur2[0]?.children[1]?.textContent);
 
+  // 跟随状态下，程序自己滚动不能把 followLatest 关掉（否则播放时列表不再跟着走）
+  fakeVideo.currentTime = 24;
+  await sleep(400);
+  const cur3 = body.children.filter((c) => c.className.includes('row') && c.classList.contains('cur'));
+  check('继续播放仍会高亮' , cur3.length === 1, `cur=${cur3.length}`);
+  const followBtn = getPanel().children.find((c) => c.className.includes('head'))?.children?.find((c) => c.className?.includes('latest'));
+  check('跟随按钮保持隐藏（没被误判为用户滚动）', !followBtn?.classList?.contains('show'), followBtn?.className);
+
   // 顶部显示视频进度而不是处理耗时
   const timerText = getPanel().children.find((c) => c.className.includes('head'))?.children?.[1]?.textContent || '';
   check('顶部显示视频进度', /^\d{2}:\d{2}/.test(timerText), timerText);
@@ -460,6 +468,7 @@ if (failed) {
 }
 console.log('全部通过：面板构建、渲染、时间戳、高亮、开关、自动滚动都正常。');
 process.exit(0);
+
 
 
 

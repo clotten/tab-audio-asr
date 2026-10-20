@@ -1,4 +1,4 @@
-/**
+﻿/**
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -33,6 +33,48 @@
   const SETTINGS_KEY = 'asrSettings';
   const ACTIVE = new Set(['starting', 'recording', 'stopping']);
   const IDLE_HIDE_MS = 15000;
+
+  /* ============================ 文稿模式（可插拔） ============================ */
+  /*
+   * 面板只做"外壳"：DOM、拖拽、缩放、高亮、渲染。
+   * 跟"这份稿子从哪来"有关的行为全部交给模式对象，避免在渲染代码里堆 if：
+   *   mapping      'sample' = 录制，需要 wall→video 采样映射
+   *                'direct' = 整段提取/导入，时间戳本来就是视频时间
+   *   badge        顶部显示什么（默认显示录制时长）
+   *   statusLabel  底部状态文字
+   *   followLabel  「回到最新」/「跟随播放」按钮文案
+   *   scrollTarget 'bottom' = 滚到最新；'current' = 滚到当前高亮那句
+   *   sig          参与"要不要重绘"的身份串（换会话必须变）
+   *   onFollow     点跟随按钮时干什么
+   *
+   * 想加新模式（例如"导入的 SRT"），在这里加一项即可，渲染代码不用动。
+   */
+  const MODES = {
+    live: {
+      id: 'live',
+      mapping: 'sample',
+      statusLabel: (active) => (active ? '录制中' : '已停止'),
+      followLabel: '回到最新',
+      scrollTarget: 'bottom',
+      sig: () => 'rec',
+      onFollow: null
+    },
+    staticDoc: {
+      id: 'staticDoc',
+      mapping: 'direct',
+      statusLabel: () => '整段稿（跟随播放）',
+      followLabel: '跟随播放',
+      scrollTarget: 'current',
+      sig: (s) => `url:${s?.diag?.ingestUrl || s?.diag?.source || ''}`,
+      onFollow: null // 在 build() 里绑定到具体滚动函数
+    }
+  };
+
+  /** 单一判定点：这份稿子是录制来的，还是整段提取/导入的 */
+  function resolveMode() {
+    const d = session?.diag;
+    return d?.source === 'url' || d?.ingestUrl ? MODES.staticDoc : MODES.live;
+  }
   const MAX_ROWS = 400;
 
   const DEFAULT_SUB = {
@@ -54,6 +96,9 @@
   let dead = false;
   // 被「显示到页面」显式唤起时，忽略"空闲自动隐藏"（否则注入后立刻又藏起来）
   let forced = false;
+
+  // 程序自己滚动时，scroll 事件不该被当成"用户手动滚动"（否则一滚就关掉跟随）
+  let scrollGuardUntil = 0;
   let fsFullscreenRetry = false;
 
   // 渲染缓存
@@ -113,12 +158,12 @@
 
   function ensureMapping(items) {
     if (!session?.startedAt) return;
+    const mode = resolveMode();
 
-    // 整段提取（直链媒体）的时间戳本来就相对视频开头，不需要 wall→video 映射，
-    // 直接按 startMs 当视频时间——这样播放时就能正常高亮。
-    // 注意：必须用 isStaticTranscript() 统一判断，别在这里单看 source 字段，
-    // 否则早期会话（只有 ingestUrl、没有 source）会走下面那条录制映射，结果永远映射不上。
-    if (isStaticTranscript()) {
+    // 时间戳映射策略由模式决定：
+    //   direct → 整段提取/导入，startMs 本来就是视频时间，直接拿来用
+    //   sample → 录制，需要 wall clock→video 采样点插值
+    if (mode.mapping === 'direct') {
       if (mappedForSession !== session.startedAt) {
         mappedForSession = session.startedAt;
         itemVideoStart.clear();
@@ -365,8 +410,8 @@
       followLatest = true;
       latestBtn.classList.remove('show');
 
-      // 静态稿「跟随播放」：跳到视频当前那一句，而不是全文末尾
-      if (isStaticTranscript()) {
+      // 行为交给模式：录制时滚到最新，静态稿滚到当前句
+      if (resolveMode().scrollTarget === 'current') {
         updateHighlight();
         if (lastCurIndex != null) {
           scrollToRow(lastCurIndex);
@@ -433,6 +478,15 @@
     // 用户手动滚动 → 关掉自动跟随
     body.addEventListener('scroll', () => {
       if (resizing) return;
+      if (Date.now() < scrollGuardUntil) return; // 这是我们自己滚的，不算用户操作
+
+      if (resolveMode().scrollTarget === 'current') {
+        // 静态稿：任何用户滚动都暂停跟随，点「跟随播放」恢复
+        followLatest = false;
+        latestBtn.classList.add('show');
+        return;
+      }
+
       const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 24;
       followLatest = atBottom;
       latestBtn.classList.toggle('show', !atBottom);
@@ -615,15 +669,10 @@
   }
 
   function scrollToBottom() {
+    scrollGuardUntil = Date.now() + 500;
     parts.body.scrollTop = parts.body.scrollHeight;
   }
 
-  /** 这份稿子是不是"整段提取/导入"的静态字幕（没有录制过程） */
-  function isStaticTranscript() {
-    const d = session?.diag;
-    // 兼容早期会话：那时还没写 source 字段，但有 ingestUrl / ingestPhase
-    return d?.source === 'url' || !!d?.ingestUrl;
-  }
 
   /**
    * 把某一句滚到可视区中间（静态稿跟随播放用）。
@@ -645,6 +694,7 @@
 
     const delta = er.top - br.top - (br.height - er.height) / 2;
     const max = Math.max(0, body.scrollHeight - body.clientHeight);
+    scrollGuardUntil = Date.now() + 500;
     body.scrollTop = Math.max(0, Math.min(body.scrollTop + delta, max));
   }
 
@@ -780,7 +830,7 @@
     const sig = [
       // 会话身份：换了会话（重新提取/重新录制）必须重建，否则句数相同就会沿用旧行
       session.startedAt || '-',
-      session.diag?.ingestUrl ? 'url' : 'rec',
+      resolveMode().sig(session),
       items.length,
       last?.index ?? '-',
       (last?.text || '').length,
@@ -796,7 +846,7 @@
 
       // 静态稿（整段提取/导入）：定位到"视频当前播到的那一句"，
       // 而不是滚到底部——否则一打开就跳到全文末尾，看着像错乱。
-      if (isStaticTranscript() && followLatest) {
+      if (resolveMode().scrollTarget === 'current' && followLatest) {
         const video = findVideo();
         const t = video ? video.currentTime : null;
         let target = null;
@@ -827,9 +877,10 @@
     updateLive(partial);
 
     parts.whereCount.textContent = `${items.length} 句 / ${items.reduce((n, s) => n + s.text.length, 0)} 字`;
-    if (parts.latestBtn) parts.latestBtn.textContent = isStaticTranscript() ? '跟随播放' : '回到最新';
+    const mode = resolveMode();
+    if (parts.latestBtn) parts.latestBtn.textContent = mode.followLabel;
 
-    parts.whereMode.textContent = isStaticTranscript() ? '整段稿（跟随播放）' : active ? '录制中' : '已停止';
+    parts.whereMode.textContent = mode.statusLabel(active);
 
     updateBadge();
 
@@ -848,9 +899,10 @@
   }
 
   function updateBadge() {
-    // 整段提取/导入的稿子：显示"视频播到哪"，而不是"处理花了多久"
-    if (isStaticTranscript()) {
-      const video = findVideo();
+    const video = findVideo();
+
+    // 模式决定顶部显示什么：录制 → 录制时长；整段稿 → 视频播到哪
+    if (resolveMode().scrollTarget === 'current') {
       if (!video) {
         parts.time.textContent = '--:--';
         return;
@@ -880,7 +932,7 @@
         const { curIndex } = updateHighlight();
         // 高亮换人了才滚，别每 250ms 都拽一次滚动条
         if (curIndex != null && curIndex !== lastCurIndex && followLatest) {
-          if (isStaticTranscript()) scrollToRow(curIndex);
+          if (resolveMode().scrollTarget === 'current') scrollToRow(curIndex);
           else scrollToBottom();
         }
         lastCurIndex = curIndex;
@@ -1064,6 +1116,7 @@
     }
   }
 })();
+
 
 
 
