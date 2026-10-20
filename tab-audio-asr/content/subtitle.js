@@ -15,8 +15,19 @@
  */
 
 (() => {
-  if (window.__videoAsrSubtitleLoaded) return;
+  // 扩展刷新后，页面里可能还留着旧实例（它的代码已随旧扩展失效，但 DOM 还在）。
+  // 这种情况必须允许重新挂载，否则新代码永远进不来——之前就是被这行挡住了。
+  const __staleHost =
+    typeof document.getElementById === 'function' ? document.getElementById('__video_asr_panel_host') : null;
+  if (window.__videoAsrSubtitleLoaded && __staleHost) return;
   window.__videoAsrSubtitleLoaded = true;
+  if (__staleHost) {
+    try {
+      __staleHost.remove();
+    } catch {
+      /* ignore */
+    }
+  }
 
   const SESSION_KEY = 'asrSession';
   const SETTINGS_KEY = 'asrSettings';
@@ -597,7 +608,9 @@
 
   /** 这份稿子是不是"整段提取/导入"的静态字幕（没有录制过程） */
   function isStaticTranscript() {
-    return session?.diag?.source === 'url';
+    const d = session?.diag;
+    // 兼容早期会话：那时还没写 source 字段，但有 ingestUrl / ingestPhase
+    return d?.source === 'url' || !!d?.ingestUrl;
   }
 
   /** 把某一句滚到可视区中间（静态稿跟随播放用） */
@@ -998,6 +1011,8 @@
     }
   }
 })();
+
+
 
 
 

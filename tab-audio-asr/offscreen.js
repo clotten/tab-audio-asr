@@ -1215,6 +1215,7 @@ function startIngest(url) {
   state.diag.ingestBytes = 0;
   state.diag.ingestDone = 0;
   state.diag.ingestError = '';
+  state.diag.source = 'url'; // 标记：这份稿子来自直链整段提取（不是录制）
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 
@@ -1684,6 +1685,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
 
 
 

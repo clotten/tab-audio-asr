@@ -174,6 +174,7 @@ fakeVideo.play = async () => {
 const bodyEl = new FakeEl('body');
 const fakeDocument = {
   createElement: (tag) => new FakeEl(tag),
+  getElementById: () => null, // 面板会查有没有僵尸面板，桩里一律返回 null
   createDocumentFragment: () => new FakeEl('#fragment'),
   body: bodyEl,
   documentElement: new FakeEl('html'),
