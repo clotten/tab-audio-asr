@@ -895,6 +895,36 @@ console.log('\n16) 整段提取（直链 MP4）：不用播放就能出全稿');
   check('blob: 链接被拒绝', bad?.ok === false && /http/i.test(bad.error || ''), JSON.stringify(bad));
 }
 
+console.log('\n17) 历史稿：重新开始/清空不会把稿子弄丢');
+{
+  // 当前 session 是整段提取的结果，记下句数
+  const before = (store.get('asrSession')?.segments || []).filter((s) => s.status === 'done').length;
+  check('提取后本来有句子', before > 0, String(before));
+
+  const info0 = await bus.send('popup', { type: 'HISTORY_INFO' });
+  check('HISTORY_INFO 可用', info0?.ok === true, JSON.stringify(info0).slice(0, 120));
+
+  // 点「重新开始」= 新建会话，旧的应先进历史
+  pcmEnabled = true;
+  await bus.send('popup', { type: 'START', tabId: 1, settings: SETTINGS });
+  await sleep(300);
+
+  const info1 = await bus.send('popup', { type: 'HISTORY_INFO' });
+  check('重新开始后旧稿进了历史', (info1?.count || 0) > (info0?.count || 0), `${info0?.count} → ${info1?.count}`);
+
+  await bus.send('popup', { type: 'STOP' });
+  await sleep(200);
+
+  // 恢复
+  const restored = await bus.send('popup', { type: 'RESTORE_HISTORY' });
+  check('恢复成功', restored?.ok === true && restored.count > 0, JSON.stringify(restored).slice(0, 140));
+
+  session = store.get('asrSession');
+  const after = (session?.segments || []).filter((s) => s.status === 'done').length;
+  check('恢复后句子数对得上', after === restored.count, `${after} vs ${restored.count}`);
+  check('恢复后文稿非空', !!(session?.segments || []).some((s) => s.text), '文本为空');
+}
+
 console.log('\n6) 越界检查');
 const badMessages = bus.log.filter((m) => m.type === 'STATE_SET' && m.to !== 'sw');
 check('STATE_SET 全部走 SW', badMessages.length === 0, JSON.stringify(badMessages));
@@ -906,6 +936,7 @@ if (failed) {
 }
 console.log('全部通过：消息流、状态落盘、分段上传、停止/清空都正常。');
 process.exit(0);
+
 
 
 

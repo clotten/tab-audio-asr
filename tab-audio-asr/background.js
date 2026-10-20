@@ -12,6 +12,7 @@
 
 const OFFSCREEN_URL = 'offscreen.html';
 const LS_SESSION = 'asrSession';
+const LS_HISTORY = 'asrHistory';
 const SUBTITLE_SCRIPT = 'content/subtitle.js';
 const ACTIVE_STATUS = ['starting', 'recording', 'stopping'];
 
@@ -97,6 +98,28 @@ async function waitOffscreenReady(timeoutMs = 4000) {
     await sleep(80);
   }
   return false;
+}
+
+/**
+ * 把当前会话存进历史，避免"重新开始/清空"把稿子弄丢。
+ * 只存有实际句子的会话，最多留 5 份。
+ */
+async function archiveCurrentSession(reason) {
+  const stored = await chrome.storage.local.get([LS_SESSION, LS_HISTORY]);
+  const cur = stored[LS_SESSION];
+  const hasText = (cur?.segments || []).some((s) => s.status === 'done' && s.text);
+  if (!hasText) return false;
+
+  const list = Array.isArray(stored[LS_HISTORY]) ? stored[LS_HISTORY] : [];
+  list.unshift({
+    archivedAt: Date.now(),
+    reason: reason || '',
+    title: cur.tabTitle || cur.diag?.ingestUrl || '',
+    count: (cur.segments || []).filter((s) => s.status === 'done' && s.text).length,
+    session: cur
+  });
+  await chrome.storage.local.set({ [LS_HISTORY]: list.slice(0, 5) });
+  return true;
 }
 
 function sendToOffscreen(payload) {
@@ -320,14 +343,44 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
 
         case 'START':
+          // 新会话会覆盖当前 session，先把有内容的旧稿存进历史
+          await archiveCurrentSession('start');
           sendResponse(await startCapture(msg));
           break;
         case 'STOP':
           sendResponse(await stopCapture());
           break;
         case 'RESET':
+          // 清空/重开前先把稿子存进历史，别一按就没了
+          await archiveCurrentSession('reset');
           sendResponse(await resetSession());
           break;
+        case 'HISTORY_INFO': {
+          const { [LS_HISTORY]: hist } = await chrome.storage.local.get(LS_HISTORY);
+          const list = Array.isArray(hist) ? hist : [];
+          sendResponse({
+            ok: true,
+            count: list.length,
+            items: list.map((h) => ({ archivedAt: h.archivedAt, title: h.title, count: h.count }))
+          });
+          break;
+        }
+
+        case 'RESTORE_HISTORY': {
+          // 把最近一份归档恢复成当前稿（导出 SRT 就靠它）
+          const { [LS_HISTORY]: hist2 } = await chrome.storage.local.get(LS_HISTORY);
+          const list2 = Array.isArray(hist2) ? hist2 : [];
+          if (!list2.length) {
+            sendResponse({ ok: false, error: '没有历史稿' });
+            break;
+          }
+          const last = list2.shift();
+          await chrome.storage.local.set({ [LS_SESSION]: last.session, [LS_HISTORY]: list2 });
+          refreshBadge(last.session?.status);
+          sendResponse({ ok: true, count: last.count || 0, title: last.title || '' });
+          break;
+        }
+
         case 'GET_STATE': {
           const { [LS_SESSION]: session } = await chrome.storage.local.get(LS_SESSION);
           sendResponse({ ok: true, state: session || null });
@@ -359,7 +412,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             ok: false,
             error: `后台页面未响应：${String(err?.message || err)}`
           }));
-          sendResponse(res || { ok: false, error: '没有响应' });
+
+          // 整段提取不走录制，所以字幕层要在这里补注入，否则页面上一片空白
+          if (res?.ok && msg.tabId) {
+            const ok = await injectSubtitle(msg.tabId);
+            sendResponse({ ...res, subtitle: ok });
+          } else {
+            sendResponse(res || { ok: false, error: '没有响应' });
+          }
           break;
         }
 
@@ -421,4 +481,6 @@ chrome.runtime.onStartup.addListener(async () => {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+
 

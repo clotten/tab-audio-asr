@@ -50,6 +50,9 @@ async function init() {
   await reconcileStaleSession();
   render();
 
+  // 有没有被覆盖的旧稿，决定「恢复上一份」显不显示
+  await refreshHistory();
+
   if (!settings.apiKey) el('settingsBox').open = true;
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -83,6 +86,7 @@ function bindEvents() {
   el('txtBtn').addEventListener('click', exportTxt);
   el('srtBtn').addEventListener('click', exportSrt);
   el('resetBtn').addEventListener('click', resetSession);
+  el('historyBtn').addEventListener('click', restoreHistory);
   el('correctBtn').addEventListener('click', correctAll);
   el('refineBtn').addEventListener('click', refineAll);
   el('saveAudioBtn').addEventListener('click', saveRecording);
@@ -570,6 +574,7 @@ async function stop() {
   session = asrSession || session;
   render();
 
+  await refreshHistory();
   const canRefine = !!session?.diag?.audioFile && !session?.refined;
   el('hint').textContent = canRefine
     ? '已停止。点「离线精校」能按长上下文重跑一遍，比实时准很多。'
@@ -584,7 +589,8 @@ async function resetSession() {
   if (name) await removeAudioFile(name).catch(() => {});
   session = null;
   render();
-  note('已清空。', 'ok');
+  await refreshHistory();
+  note('已清空（旧稿已存进历史，可点「恢复上一份」找回）。', 'ok');
 }
 
 /* ------------------------------ 表单 ------------------------------ */
@@ -687,7 +693,7 @@ async function ingestFromPage() {
 
     note(`开始整段提取：\n${url.slice(0, 120)}\n下载 → 解码 → 转写，进度会显示在下方。`);
 
-    const res = await chrome.runtime.sendMessage({ type: 'INGEST_URL', url }).catch((err) => ({
+    const res = await chrome.runtime.sendMessage({ type: 'INGEST_URL', url, tabId: activeTab?.id }).catch((err) => ({
       ok: false,
       error: String(err?.message || err)
     }));
@@ -717,6 +723,42 @@ function pickMediaUrl(report) {
     tracks[0] ||
     ''
   );
+}
+
+/* ------------------------------ 历史稿 ------------------------------ */
+
+/** 有没有被覆盖/清空的旧稿，有就显示「恢复上一份」 */
+let historyCount = 0;
+
+async function refreshHistory() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'HISTORY_INFO' });
+    historyCount = res?.ok ? res.count || 0 : 0;
+  } catch {
+    historyCount = 0;
+  }
+  const btn = el('historyBtn');
+  if (!btn) return;
+  btn.hidden = historyCount === 0;
+  btn.textContent = historyCount > 0 ? `恢复上一份（${historyCount}）` : '恢复上一份';
+}
+
+async function restoreHistory() {
+  const res = await chrome.runtime.sendMessage({ type: 'RESTORE_HISTORY' }).catch((err) => ({
+    ok: false,
+    error: String(err?.message || err)
+  }));
+
+  if (!res?.ok) {
+    note(`恢复失败：${res?.error || '未知'}`, 'err');
+    return refreshHistory();
+  }
+
+  const { asrSession } = await chrome.storage.local.get('asrSession');
+  session = asrSession || session;
+  render();
+  await refreshHistory();
+  note(`已恢复上一份稿子：${res.count} 句${res.title ? `（${res.title.slice(0, 60)}）` : ''}`, 'ok');
 }
 
 /* ------------------------------ 探测本页媒体 ------------------------------ */
@@ -953,6 +995,8 @@ function note(text, kind = '') {
   box.className = 'note' + (kind ? ' ' + kind : '');
   el('hint').textContent = text;
 }
+
+
 
 
 
