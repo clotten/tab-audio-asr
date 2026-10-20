@@ -274,6 +274,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
 
+        case 'PROBE_MEDIA': {
+          // 探测当前页能不能整段提取（直链 / HLS / DASH / 现成字幕），
+          // 用来判断"能不能播之前就拿到全稿"。
+          let tabId = msg.tabId;
+          if (!tabId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab?.id;
+          }
+          if (!tabId) {
+            sendResponse({ ok: false, error: '没有活动标签页' });
+            break;
+          }
+          try {
+            const [res] = await chrome.scripting.executeScript({
+              target: { tabId },
+              files: ['content/probe.js']
+            });
+            sendResponse({ ok: true, report: res?.result || null });
+          } catch (err) {
+            sendResponse({ ok: false, error: `无法探测这个页面：${String(err?.message || err)}` });
+          }
+          break;
+        }
+
         case 'CLOSE_OFFSCREEN': {
           // 上传队列已清空，延迟几秒再关，避免用户马上又点开始
           const requestedAt = Date.now();

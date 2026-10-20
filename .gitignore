@@ -27,3 +27,6 @@ __pycache__/
 # 参考项目与无关归档（不是本次成果；需要时从 zip 重新解压）
 LiveTranslate-main/
 dsh-plugin-conversation-archive*/
+
+# pip 的临时构建目录（不小心落在工作区时不要提交）
+pip-*/

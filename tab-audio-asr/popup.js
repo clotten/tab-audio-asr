@@ -75,6 +75,7 @@ function bindEvents() {
   });
   el('testBtn').addEventListener('click', testApi);
   el('vadTestBtn').addEventListener('click', vadSelftest);
+  el('probeBtn').addEventListener('click', probeMedia);
   el('copyBtn').addEventListener('click', copyAll);
   el('txtBtn').addEventListener('click', exportTxt);
   el('srtBtn').addEventListener('click', exportSrt);
@@ -639,6 +640,72 @@ async function ensureHostPermission(baseUrl) {
   }
 }
 
+/* ------------------------------ 探测本页媒体 ------------------------------ */
+
+/**
+ * 问页面："能不能整段提取？"
+ * 结果决定走哪条路：现成字幕 > 直链文件 > HLS/DASH 分片 > 只能实时录。
+ */
+async function probeMedia() {
+  const btn = el('probeBtn');
+  btn.disabled = true;
+  btn.textContent = '探测中…';
+  note('正在检查这个页面能不能整段提取（刚打开页面的话，先点播放几秒再探测更准）…');
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: 'PROBE_MEDIA' });
+  } catch (err) {
+    res = { ok: false, error: String(err?.message || err) };
+  }
+
+  btn.disabled = false;
+  btn.textContent = '探测本页媒体';
+
+  if (!res?.ok) return note(`探测失败：${res?.error || '未知错误'}`, 'err');
+
+  const r = res.report;
+  if (!r) return note('探测没有返回结果（页面可能不允许注入脚本）', 'err');
+
+  const label =
+    {
+      subtitle: '✅ 页面自带字幕，可直接用（最快、质量最高）',
+      hls: '✅ 有 m3u8 播放列表 → 可下载全部分片，播之前就转完',
+      dash: '✅ 有 DASH 清单 → 可只下音频分片，播之前就转完',
+      direct: '✅ 有直链媒体文件 → 可整段下载后转写',
+      mse: '⚠️ 播放器用 MSE + blob:，没有稳定直链 → 目前只能实时录',
+      unknown: '⚠️ 没抓到媒体请求（先播放几秒再试）'
+    }[r.mode] || r.mode;
+
+  const counts = [
+    `m3u8 ${(r.media?.hls || []).length}`,
+    `mpd ${(r.media?.dash || []).length}`,
+    `整段 ${(r.media?.video || []).length + (r.media?.audio || []).length}`,
+    `分片 ${(r.media?.segment || []).length}`,
+    `字幕轨 ${(r.tracks || []).length}`,
+    `<video> ${(r.videos || []).length}`
+  ].join(' · ');
+
+  const sample = [
+    ...(r.media?.hls || []).slice(0, 1),
+    ...(r.media?.dash || []).slice(0, 1),
+    ...(r.media?.video || []).slice(0, 1),
+    ...(r.tracks || []).map((t) => ({ url: t.src }))
+  ]
+    .map((x) => x.url)
+    .filter(Boolean)
+    .slice(0, 3);
+
+  const ok = ['subtitle', 'hls', 'dash', 'direct'].includes(r.mode);
+  note(
+    `【${r.platform}】${label}\n计数：${counts}\n${(r.reasons || []).join('\n')}` +
+      (sample.length ? `\n链接：\n${sample.join('\n')}` : ''),
+    ok ? 'ok' : 'err'
+  );
+
+  console.log('[probe]', r);
+}
+
 /* ------------------------------ VAD 自检 ------------------------------ */
 
 async function vadSelftest() {
@@ -803,4 +870,6 @@ function note(text, kind = '') {
   box.className = 'note' + (kind ? ' ' + kind : '');
   el('hint').textContent = text;
 }
+
+
 
