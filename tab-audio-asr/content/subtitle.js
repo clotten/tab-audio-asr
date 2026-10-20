@@ -62,7 +62,8 @@
     staticDoc: {
       id: 'staticDoc',
       mapping: 'direct',
-      statusLabel: () => '整段稿（跟随播放）',
+      statusLabel: () =>
+        session?.status === 'processing' ? '整段提取中' : '整段稿（跟随播放）',
       followLabel: '跟随播放',
       scrollTarget: 'current',
       sig: (s) => `url:${s?.diag?.ingestUrl || s?.diag?.source || ''}`,
@@ -378,6 +379,7 @@
       }
 
       .empty { color: rgba(233,238,245,.42); font-style: italic; padding: 6px 7px; }
+      .empty.hide { display: none; } /* 整段提取期间隐藏"正在聆听" */
 
       /* 「生成中」独立一栏：和已确认的正文分开，避免半句话混进稿子里 */
       .live {
@@ -894,6 +896,10 @@
 
     wrap.classList.remove('hidden');
     // 字幕必须按视频隔离：稿子属于别的视频时，一个字都不显示
+    // 整段提取期间：正文区不显示「正在聆听」，只留下方进度栏，避免两句话并存
+    const processing = session.status === 'processing';
+    if (parts.empty) parts.empty.classList.toggle('hide', processing);
+
     const keyNow = pageVideoKey();
     const foreign = !!session.videoKey && session.videoKey !== keyNow;
     // 本页的稿子不在库里时，试着从「字幕库」取一份（同一视频以前提取过）
@@ -1200,6 +1206,8 @@
     }
   }
 })();
+
+
 
 
 

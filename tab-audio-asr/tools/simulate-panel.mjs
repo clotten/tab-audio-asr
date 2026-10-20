@@ -492,6 +492,25 @@ console.log('\n12) 别的视频的稿子不显示在本页');
 
   const empty = body.children.find((c) => c.classList.contains('empty'));
 
+
+console.log('\n14) 整段提取期间：不显示「正在聆听」');
+{
+  const base = store.get('asrSession');
+  await chromeStub.storage.local.set({
+    asrSession: { ...base, status: 'processing', videoKey: '', segments: [], diag: { source: 'url', ingestPhase: 'decode', ingestDone: 3, ingestUrl: 'https://x/y.mp4' } }
+  });
+  await sleep(250);
+
+  const body = getPanel().children.find((c) => c.classList.contains('body'));
+  const empty = body.children.find((c) => c.classList.contains('empty'));
+  check('空状态被隐藏', !empty || empty.classList.contains('hide'), String(empty?.className));
+
+  const live = getPanel().children.find((c) => c.classList.contains('live'));
+  const liveText = live && live.children.find((c) => c.classList.contains('live-text'));
+  check('进度显示在生成中栏', (liveText?.textContent || '').includes('整段提取'), liveText?.textContent);
+  check('不再出现「正在聆听」', !(liveText?.textContent || '').includes('正在聆听'), liveText?.textContent);
+}
+
 }
 console.log('\n11) 源码不变式：滚动目标必须由模式决定');
 {
