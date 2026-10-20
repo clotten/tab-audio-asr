@@ -1,4 +1,4 @@
-/**
+﻿/**
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -377,20 +377,6 @@
         animation: pulse 1s infinite; display: inline-block;
       }
 
-      /* 页面内设置抽屉：不用再去点浏览器工具栏图标 */
-      .drawer { display: none; flex: 0 0 auto; max-height: 46%; overflow-y: auto; padding: 8px 10px;
-        border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03); }
-      .drawer.show { display: block; }
-      .drawer label { display: block; margin: 6px 0 2px; font-size: 11px; color: rgba(233,238,245,.55); }
-      .drawer input[type=text], .drawer input[type=password], .drawer textarea {
-        width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 12px;
-        color: #e9eef5; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.14); border-radius: 5px; }
-      .drawer textarea { resize: vertical; min-height: 52px; font-family: inherit; }
-      .drawer .row-check { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 12px; color: rgba(233,238,245,.8); }
-      .drawer .row-check input { accent-color: #3b82f6; }
-      .drawer .drawer-actions { display: flex; gap: 6px; margin-top: 8px; }
-      .drawer .hint-line { margin-top: 6px; font-size: 11px; color: rgba(233,238,245,.45); }
-
       .empty { color: rgba(233,238,245,.42); font-style: italic; padding: 6px 7px; }
 
       /* 「生成中」独立一栏：和已确认的正文分开，避免半句话混进稿子里 */
@@ -486,86 +472,6 @@
       scrollToBottom();
     });
 
-    // ⚙ 页面内设置：不用再点浏览器工具栏里的插件图标
-    const gearBtn = document.createElement('button');
-    gearBtn.className = 'btn gear';
-    gearBtn.textContent = '⚙';
-    gearBtn.title = '设置（就在面板里改，不用开插件弹窗）';
-
-    const drawer = document.createElement('div');
-    drawer.className = 'drawer';
-
-    const setKey = document.createElement('input');
-    setKey.type = 'password';
-    setKey.placeholder = 'sk-...';
-
-    const setModel = document.createElement('input');
-    setModel.type = 'text';
-    setModel.placeholder = 'Qwen/Qwen3-ASR-1.7B';
-
-    const setGlossary = document.createElement('textarea');
-    setGlossary.rows = 3;
-    setGlossary.placeholder = '一行一条：术语 / 错法 => 正确写法';
-
-    const rowCheck = (labelText) => {
-      const row = document.createElement('label');
-      row.className = 'row-check';
-      const box = document.createElement('input');
-      box.type = 'checkbox';
-      const span = document.createElement('span');
-      span.textContent = labelText;
-      row.append(box, span);
-      return { row, box };
-    };
-
-    const chkSub = rowCheck('在视频页显示悬浮字幕');
-    const chkMute = rowCheck('静音录制（捕获声音但不放出来）');
-    const chkSave = rowCheck('同时保存音频（WAV）');
-    const chkSilero = rowCheck('Silero VAD（跳过音乐/掌声）');
-    const chkIncr = rowCheck('增量提交（边说边出字）');
-
-    const saveRow = document.createElement('div');
-    saveRow.className = 'drawer-actions';
-    const saveSetBtn = document.createElement('button');
-    saveSetBtn.className = 'btn';
-    saveSetBtn.textContent = '保存';
-    const closeSetBtn = document.createElement('button');
-    closeSetBtn.className = 'btn ghost';
-    closeSetBtn.textContent = '关闭';
-    saveRow.append(saveSetBtn, closeSetBtn);
-
-    const drawerHint = document.createElement('div');
-    drawerHint.className = 'hint-line';
-    drawerHint.textContent = '改完点「保存」立即生效；「整段提取/开始转录」在插件弹窗里。';
-
-    drawer.append(
-      document.createElement('div'),
-      (() => {
-        const l = document.createElement('label');
-        l.textContent = 'API Key（硅基流动）';
-        return l;
-      })(),
-      setKey,
-      (() => {
-        const l = document.createElement('label');
-        l.textContent = '识别模型';
-        return l;
-      })(),
-      setModel,
-      (() => {
-        const l = document.createElement('label');
-        l.textContent = '术语表';
-        return l;
-      })(),
-      setGlossary,
-      chkSub.row,
-      chkMute.row,
-      chkSave.row,
-      chkSilero.row,
-      chkIncr.row,
-      saveRow,
-      drawerHint
-    );
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'btn close';
@@ -576,7 +482,7 @@
       setEnabled(false);
     });
 
-    head.append(dot, time, spacer, model, latestBtn, gearBtn, closeBtn);
+    head.append(dot, time, spacer, model, latestBtn, closeBtn);
 
     const body = document.createElement('div');
     body.className = 'body';
@@ -616,7 +522,7 @@
     warn.className = 'warn';
     warn.textContent = '⚠ 捕获到的音频是静音：这一页可能被暂停或静音了';
 
-    panel.append(head, drawer, warn, body, live, where);
+    panel.append(head, warn, body, live, where);
     root.append(style, panel);
     document.addEventListener('fullscreenchange', mount, true);
     document.addEventListener('webkitfullscreenchange', mount, true);
@@ -637,54 +543,6 @@
       followLatest = atBottom;
       latestBtn.classList.toggle('show', !atBottom);
     });
-
-    /* ---- 设置抽屉：填充 / 保存 / 开合 ---- */
-
-    function fillDrawer() {
-      setKey.value = settings.apiKey || '';
-      setModel.value = settings.model || '';
-      setGlossary.value = settings.glossary || '';
-      chkSub.box.checked = (settings.subtitle?.enabled ?? true) !== false;
-      chkMute.box.checked = !!settings.mutePlayback;
-      chkSave.box.checked = !!settings.saveAudio;
-      chkSilero.box.checked = settings.sileroVad !== false;
-      chkIncr.box.checked = settings.incrementalAsr !== false;
-    }
-
-    async function saveDrawer() {
-      const { [SETTINGS_KEY]: stored } = await chrome.storage.local.get(SETTINGS_KEY);
-      const next = {
-        ...(stored || {}),
-        apiKey: setKey.value.trim(),
-        model: setModel.value.trim() || (stored?.model ?? 'Qwen/Qwen3-ASR-1.7B'),
-        glossary: setGlossary.value,
-        mutePlayback: chkMute.box.checked,
-        saveAudio: chkSave.box.checked,
-        sileroVad: chkSilero.box.checked,
-        incrementalAsr: chkIncr.box.checked,
-        subtitle: { ...(stored?.subtitle || DEFAULT_SUB), enabled: chkSub.box.checked }
-      };
-      await chrome.storage.local.set({ [SETTINGS_KEY]: next });
-      settings = { ...settings, ...next };
-      drawer.classList.remove('show');
-      render();
-    }
-
-    gearBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (!drawer.classList.contains('show')) fillDrawer();
-      drawer.classList.toggle('show');
-    });
-    saveSetBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      saveDrawer();
-    });
-    closeSetBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      drawer.classList.remove('show');
-    });
-    // 抽屉里点哪儿都别触发拖拽
-    drawer.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     head.addEventListener('pointerdown', onDragStart);
 
@@ -707,7 +565,7 @@
       ro.observe(panel);
     }
 
-    parts = { panel, dot, time, model, body, empty, tail, live, liveText, whereCount, whereMode, latestBtn, warn, drawer, gearBtn };
+    parts = { panel, dot, time, model, body, empty, tail, live, liveText, whereCount, whereMode, latestBtn, warn };
     wrap = panel;
 
     mount();

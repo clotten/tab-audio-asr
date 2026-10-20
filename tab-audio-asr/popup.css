@@ -233,3 +233,27 @@ footer {
   text-underline-offset: 2px;
 }
 .hint { font-size: 10.5px; color: #5b6879; text-align: right; flex: 1 1 auto; }
+
+/* 分区标题：把"本页工具 / 显示 / 音频 / 识别"分开，别混成一堆开关 */
+.sectLabel {
+  margin: 12px 0 4px;
+  font-size: 11px;
+  letter-spacing: .06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.sectLabel:first-of-type { margin-top: 8px; }
+
+/* 行内输入（例如 字号 [15]） */
+label.inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+label.inline input {
+  width: 74px;
+  margin-top: 0;
+}

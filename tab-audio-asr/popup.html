@@ -25,10 +25,26 @@
         <button class="btn primary" id="toggleBtn">开始转录</button>
       </div>
       <div class="meta" id="progress">尚未开始</div>
+      <p class="sectLabel">本页工具</p>
+      <div class="rowActions">
+        <button class="btn primary wide" id="ingestBtn" title="页面里的媒体是直链时，整段下载后转写，播之前就能拿到全稿">整段提取（不用等播放）</button>
+      </div>
+      <div class="rowActions">
+        <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
+        <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
+        <span class="mini" id="prescanHint"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <p class="sectLabel">显示</p>
       <label class="check">
         <input type="checkbox" id="subtitleEnabled" />
         <span>在视频页显示悬浮字幕</span>
       </label>
+      <label class="inline">字号<input id="subtitleFontSize" type="number" min="12" max="48" step="2" /></label>
+
+      <p class="sectLabel">音频</p>
       <label class="check">
         <input type="checkbox" id="mutePlayback" />
         <span>静音录制（捕获声音但不放出来）</span>
@@ -37,6 +53,8 @@
         <input type="checkbox" id="saveAudio" />
         <span>同时保存音频（WAV，录完可下载）</span>
       </label>
+
+      <p class="sectLabel">识别</p>
       <label class="check">
         <input type="checkbox" id="sileroVad" />
         <span>Silero VAD（判别音乐/掌声并跳过）</span>
@@ -45,32 +63,23 @@
         <input type="checkbox" id="incrementalAsr" />
         <span>增量提交（边说边出字，已说完的句子立刻定稿）</span>
       </label>
-      <div class="rowActions">
-        <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
-        <span class="mini" id="prescanHint"></span>
-      </div>
     </section>
 
     <details class="card" id="settingsBox">
-      <summary>设置</summary>
+      <summary>接口与模型</summary>
       <label>API Key<input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
       <label>模型名<input id="model" type="text" spellcheck="false" /></label>
       <label>接口地址<input id="baseUrl" type="text" spellcheck="false" /></label>
-      <label>每段秒数（仅回退通路生效；实时通路自动切句）<input id="segmentSeconds" type="number" min="10" max="600" step="5" /></label>
-      <label>字幕字号<input id="subtitleFontSize" type="number" min="12" max="48" step="2" /></label>
-      <label>预扫倍速（1–2 之间最稳，实测 1.5 倍准确率最好）<input id="prescanRate" type="number" min="1" max="2" step="0.1" /></label>
       <label>纠错模型（事后校正用的对话模型）<input id="correctModel" type="text" spellcheck="false" /></label>
+      <label>每段秒数（仅回退通路生效；实时通路自动切句）<input id="segmentSeconds" type="number" min="10" max="600" step="5" /></label>
+      <label>预扫倍速（1–2 之间最稳，实测 1.5 倍准确率最好）<input id="prescanRate" type="number" min="1" max="2" step="0.1" /></label>
       <label>术语表（一行一条；<code>错=>对</code> 会本地即时替换，其余作为纠错提示）
-        <textarea id="glossary" rows="7" spellcheck="false"></textarea>
+        <textarea id="glossary" rows="6" spellcheck="false"></textarea>
       </label>
       <div class="rowActions">
         <button class="btn" id="testBtn">自测接口</button>
         <button class="btn" id="vadTestBtn" title="检查 Silero VAD 的运行时/模型是否正常">VAD 自检</button>
-        <button class="btn" id="probeBtn" title="看看这个页面能不能整段提取（不用等播放）">探测本页媒体</button>
         <button class="btn" id="saveBtn">保存设置</button>
-      </div>
-      <div class="rowActions">
-        <button class="btn primary wide" id="ingestBtn" title="页面里的媒体是直链时，整段下载后转写，播之前就能拿到全稿">整段提取（不用等播放）</button>
       </div>
       <p class="note" id="settingsNote"></p>
     </details>
