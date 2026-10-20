@@ -1,4 +1,4 @@
-﻿/**
+/**
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -116,7 +116,9 @@
 
     // 整段提取（直链媒体）的时间戳本来就相对视频开头，不需要 wall→video 映射，
     // 直接按 startMs 当视频时间——这样播放时就能正常高亮。
-    if (session.diag?.source === 'url') {
+    // 注意：必须用 isStaticTranscript() 统一判断，别在这里单看 source 字段，
+    // 否则早期会话（只有 ingestUrl、没有 source）会走下面那条录制映射，结果永远映射不上。
+    if (isStaticTranscript()) {
       if (mappedForSession !== session.startedAt) {
         mappedForSession = session.startedAt;
         itemVideoStart.clear();
@@ -776,6 +778,9 @@
     const last = items[items.length - 1];
     const partial = session.partial && session.partial.text ? session.partial : null;
     const sig = [
+      // 会话身份：换了会话（重新提取/重新录制）必须重建，否则句数相同就会沿用旧行
+      session.startedAt || '-',
+      session.diag?.ingestUrl ? 'url' : 'rec',
       items.length,
       last?.index ?? '-',
       (last?.text || '').length,

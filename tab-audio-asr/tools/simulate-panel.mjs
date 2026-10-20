@@ -401,6 +401,58 @@ console.log('\n9) 「生成中」独立一栏（不再是正文里的一行）')
   check('定稿后「生成中」栏收起', !live.classList.contains('show'), live.className);
 }
 
+console.log('\n10) 静态稿（整段提取）按视频时间轴高亮');
+{
+  // 老会话形态：只有 ingestUrl、没有 source —— 正是真机上踩过的坑
+  const prev = store.get('asrSession');
+  const staticSession = {
+    ...prev,
+    status: 'stopped',
+    stoppedAt: Date.now(),
+    startedAt: Date.now() - 60000,
+    diag: { ingestUrl: 'https://cdn.example.com/a.mp4', ingestPhase: 'done', ingestDurationMs: 30000 },
+    segments: [
+      { index: 0, startMs: 0, durationMs: 10000, status: 'done', text: '第一句，零到十秒。' },
+      { index: 1, startMs: 10000, durationMs: 8000, status: 'done', text: '第二句，十到十八秒。' },
+      { index: 2, startMs: 18000, durationMs: 9000, status: 'done', text: '第三句，十八到二十七秒。' }
+    ]
+  };
+  await chromeStub.storage.local.set({ asrSession: staticSession });
+  await sleep(250);
+
+  // 视频播到 12 秒 → 应该高亮第二句
+  fakeVideo.currentTime = 12;
+  await sleep(400);
+
+  const body = getPanel().children.find((c) => c.classList.contains('body'));
+  const rows = body.children.filter((c) => c.className.includes('row'));
+  const cur = rows.filter((r) => r.classList.contains('cur'));
+
+  console.log('    调试 store:', JSON.stringify((store.get('asrSession')?.segments || []).map((s) => [s.startMs, s.text])));
+  console.log('    调试 rows:', JSON.stringify(rows.map((r) => r.children[1]?.textContent)));
+  console.log('    调试 diag:', JSON.stringify(store.get('asrSession')?.diag));
+  check('按视频时间高亮到唯一一行', cur.length === 1, `cur=${cur.length} / rows=${rows.length}`);
+  check(
+    '高亮的是 10–18 秒那一句',
+    (cur[0]?.children[1]?.textContent || '').includes('第二句'),
+    cur[0]?.children[1]?.textContent
+  );
+
+  // 拖到 20 秒 → 高亮应换成第三句
+  fakeVideo.currentTime = 20;
+  await sleep(400);
+  const cur2 = body.children.filter((c) => c.className.includes('row') && c.classList.contains('cur'));
+  check('拖动后高亮跟着换', (cur2[0]?.children[1]?.textContent || '').includes('第三句'), cur2[0]?.children[1]?.textContent);
+
+  // 顶部显示视频进度而不是处理耗时
+  const timerText = getPanel().children.find((c) => c.className.includes('head'))?.children?.[1]?.textContent || '';
+  check('顶部显示视频进度', /^\d{2}:\d{2}/.test(timerText), timerText);
+
+  fakeVideo.currentTime = 0;
+  await chromeStub.storage.local.set({ asrSession: prev });
+  await sleep(200);
+}
+
 console.log('');
 if (failed) {
   console.log(`${failed} 项失败`);
@@ -408,6 +460,8 @@ if (failed) {
 }
 console.log('全部通过：面板构建、渲染、时间戳、高亮、开关、自动滚动都正常。');
 process.exit(0);
+
+
 
 
 
