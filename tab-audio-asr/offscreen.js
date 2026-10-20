@@ -1324,6 +1324,9 @@ async function runIngest(url, myToken) {
 
     // 被取消：把已经转好的部分留下，状态收尾
     if (myToken !== ingestToken) {
+    // 取消也算一份成果：已转好的句子同样入库（否则这次提取白跑）
+    if (items.length) waitSaveDoc(items);
+
       state.segments = items;
       state.diag.ingesting = false;
       state.diag.ingestPhase = 'cancelled';

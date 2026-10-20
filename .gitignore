@@ -30,3 +30,6 @@ dsh-plugin-conversation-archive*/
 
 # pip 的临时构建目录（不小心落在工作区时不要提交）
 pip-*/
+
+# 打包产物（用 tools/build-dist.mjs 生成）
+dist/
