@@ -94,6 +94,9 @@ let lastInterimAt = 0;
 let interimBusy = false;
 let finalsPending = 0; // 队列里还有没传完的定稿时，跳过预览（定稿优先，别抢请求）
 
+// 整段提取的"代次"：每次开始 +1，旧的循环看到号变了就自己退出（取消用）
+let ingestToken = 0;
+
 // 增量提交的状态：已提交文本尾巴（去重用）、攒下的碎片、是否已提交过
 let interimTail = '';
 let interimPending = '';
@@ -1114,7 +1117,7 @@ function wavToSamples(arrayBuffer) {
  * 把一段完整的 16k 单声道 PCM 按窗口切句后逐段转写。
  * 「离线精校」和「整段提取」共用这一条路——两者的差别只在音频从哪来。
  */
-async function transcribeWindowed(samples, { maxRegionMs = 20000, onProgress } = {}) {
+async function transcribeWindowed(samples, { maxRegionMs = 20000, onProgress, shouldStop } = {}) {
   const total = samples.length;
   const winSamples = REFINE_WINDOW_SEC * TARGET_RATE;
   const out = [];
@@ -1132,6 +1135,7 @@ async function transcribeWindowed(samples, { maxRegionMs = 20000, onProgress } =
     });
 
     for (const region of regions) {
+      if (shouldStop && shouldStop()) return out; // 用户取消：保留已完成的段
       const absStartMs = Math.round((start / TARGET_RATE) * 1000) + region.startMs;
       const slice = window.subarray(region.startSample, region.endSample);
       const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
@@ -1204,6 +1208,19 @@ function waitSaveDoc(items) {
     })
     .catch(() => {});
 }
+/** 取消正在跑的整段提取（已转好的句子会保留） */
+function cancelIngest() {
+  if (!state?.diag?.ingesting) return { ok: false, error: '当前没有在提取' };
+  ingestToken += 1;
+  state.diag.ingesting = false;
+  state.diag.ingestPhase = 'cancelled';
+  if (state.status === 'processing') {
+    state.status = 'stopped';
+    state.stoppedAt = Date.now();
+  }
+  saveState();
+  return { ok: true };
+}
 function startIngest(url, videoKey) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
@@ -1246,12 +1263,13 @@ function startIngest(url, videoKey) {
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 
-  runIngest(target).catch(() => {});
+  const myToken = ++ingestToken;
+  runIngest(target, myToken).catch(() => {});
 
   return { ok: true, started: true };
 }
 
-async function runIngest(url) {
+async function runIngest(url, myToken) {
   const t0 = Date.now();
   try {
     /* --- 1. 下载 --- */
@@ -1294,11 +1312,23 @@ async function runIngest(url) {
 
     /* --- 3. 整段转写 --- */
     const items = await transcribeWindowed(samples, {
+      shouldStop: () => myToken !== ingestToken,
       onProgress: async (count) => {
         state.diag.ingestDone = count;
         await saveState();
       }
     });
+
+    // 被取消：把已经转好的部分留下，状态收尾
+    if (myToken !== ingestToken) {
+      state.segments = items;
+      state.diag.ingesting = false;
+      state.diag.ingestPhase = 'cancelled';
+      state.status = 'stopped';
+      state.stoppedAt = Date.now();
+      await saveState();
+      return;
+    }
 
     if (!items.length) throw new Error('没有识别出任何内容（可能整段都是音乐）');
 
@@ -1687,6 +1717,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await handleRefine());
           break;
 
+        case 'INGEST_CANCEL':
+          sendResponse(cancelIngest());
+          break;
+
         case 'INGEST_URL':
           // 直链整段提取：立刻返回，进度靠 state.diag 推给弹窗
           sendResponse(startIngest(msg.url, msg.videoKey));
@@ -1715,6 +1749,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
 
 
 

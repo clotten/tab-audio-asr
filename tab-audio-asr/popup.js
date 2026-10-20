@@ -350,6 +350,15 @@ async function reconcileStaleSession() {
   await chrome.storage.local.set({ asrSession: session });
 }
 
+/** 提取中时主按钮变成「取消整段提取」，否则用户没有出口 */
+function updateIngestButton() {
+  const ing = !!session?.diag?.ingesting;
+  const btn = el('ingestBtn');
+  if (!btn || btn.disabled) return;
+  btn.textContent = ing ? '取消整段提取' : '整段提取';
+  btn.classList.toggle('danger', ing);
+}
+
 function render() {
   const status = session?.status || 'idle';
   const active = isActive();
@@ -389,6 +398,7 @@ function render() {
     : '需要先勾「同时保存音频」并录一次';
 
   renderTimer();
+  updateIngestButton();
   renderProgress();
   renderTranscript();
 
@@ -512,6 +522,7 @@ function startTicker() {
   if (ticker) return;
   ticker = setInterval(() => {
     renderTimer();
+  updateIngestButton();
     renderProgress();
     if (!isActive()) stopTicker();
   }, 500);
@@ -677,6 +688,16 @@ async function ensureHostPermission(baseUrl) {
  */
 async function ingestFromPage() {
   setNoteSink('doc');
+
+  // 正在提取时，这个按钮变成"取消"
+  if (session?.diag?.ingesting) {
+    const res = await chrome.runtime.sendMessage({ type: 'INGEST_CANCEL' }).catch(() => null);
+    note(res?.ok ? '已取消整段提取（已经转好的句子保留在「字幕库」页）。' : '取消失败，可能已经跑完。', res?.ok ? 'ok' : 'err');
+    const { asrSession } = await chrome.storage.local.get('asrSession');
+    session = asrSession || session;
+    render();
+    return;
+  }
   const btn = el('ingestBtn');
   btn.disabled = true;
   btn.textContent = '准备中…';
@@ -1121,6 +1142,8 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
+
 
 
 

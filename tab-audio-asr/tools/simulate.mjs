@@ -348,6 +348,7 @@ const fakeDocument = {
 let fetchCalls = [];
 let chatHandler = null; // (messages) => string，用来模拟对话模型
 let asrReply = '这是识别结果，来自仿真。'; // 识别接口的返回文本
+let asrDelayMs = 0; // 识别响应延迟，用来测「取消整段提取」
 let musicMode = false; // 模拟"这一整段都是音乐"：Silero 概率接近 0
 let ortInitDelayMs = 0; // 模拟 wasm 首次编译很慢
 let ortFailMode = false; // 模拟 onnxruntime 初始化失败
@@ -418,6 +419,10 @@ async function fakeFetch(url, init) {
       text: async () => JSON.stringify({ choices: [{ message: { content } }] })
     };
   }
+
+
+  // 识别响应延迟（测「取消整段提取」用）
+  if (asrDelayMs) await new Promise((r) => setTimeout(r, asrDelayMs));
 
   return {
     ok: true,
@@ -936,6 +941,43 @@ console.log('\n17) 历史稿：重新开始/清空不会把稿子弄丢');
   check('恢复后文稿非空', !!(session?.segments || []).some((s) => s.text), '文本为空');
 }
 
+console.log('\n18) 取消整段提取（卡住时要有出口）');
+{
+  decoderMode = 'speech';
+  asrDelayMs = 400; // 让每段识别慢下来，才有机会取消
+
+  const res = await bus.send('popup', { type: 'INGEST_URL', url: 'https://cdn.example.com/slow.mp4', videoKey: 'k-slow' });
+  check('提取已开始', res?.ok === true, JSON.stringify(res));
+
+  await sleep(300);
+  let diag = store.get('asrSession')?.diag || {};
+  check('确实在提取中', diag.ingesting === true, JSON.stringify(diag).slice(0, 120));
+
+  const cancel = await bus.send('popup', { type: 'INGEST_CANCEL' });
+  check('取消返回成功', cancel?.ok === true, JSON.stringify(cancel));
+
+  await sleep(1200);
+  diag = store.get('asrSession')?.diag || {};
+  check('状态已收尾', diag.ingesting === false, JSON.stringify(diag).slice(0, 160));
+  check('标记为 cancelled', diag.ingestPhase === 'cancelled', String(diag.ingestPhase));
+
+  const session = store.get('asrSession');
+  check('会话不再是 processing', session?.status === 'stopped', String(session?.status));
+
+  // 已经转好的句子要留下，不能白跑
+  const kept = (session?.segments || []).filter((s) => s.status === 'done' && s.text).length;
+  check('保留已转好的句子', kept >= 1, `kept=${kept}`);
+
+  // 取消后再点一次不应报"正在提取中"
+  const again = await bus.send('popup', { type: 'INGEST_URL', url: 'https://cdn.example.com/slow.mp4', videoKey: 'k-slow' });
+  check('取消后可以重新开始', again?.ok === true, JSON.stringify(again));
+  await bus.send('popup', { type: 'INGEST_CANCEL' });
+  await sleep(600);
+
+  asrDelayMs = 0;
+  decoderMode = 'silence';
+}
+
 console.log('\n6) 越界检查');
 const badMessages = bus.log.filter((m) => m.type === 'STATE_SET' && m.to !== 'sw');
 check('STATE_SET 全部走 SW', badMessages.length === 0, JSON.stringify(badMessages));
@@ -947,6 +989,7 @@ if (failed) {
 }
 console.log('全部通过：消息流、状态落盘、分段上传、停止/清空都正常。');
 process.exit(0);
+
 
 
 

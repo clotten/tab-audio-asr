@@ -485,6 +485,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
 
+        case 'INGEST_CANCEL': {
+          const res = await callOffscreenTask({ type: 'INGEST_CANCEL' }).catch(() => ({ ok: false }));
+          sendResponse(res || { ok: false });
+          break;
+        }
+
         case 'INGEST_URL': {
           const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url }).catch((err) => ({
             ok: false,

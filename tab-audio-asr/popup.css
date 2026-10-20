@@ -307,3 +307,11 @@ label.inline input {
 }
 .group + .group { margin-top: 0; }
 
+
+/* 取消类按钮（例如提取中的「取消整段提取」） */
+.btn.danger {
+  background: #b4232a;
+  border-color: #b4232a;
+  color: #fff;
+}
+.btn.danger:hover { background: #c9303a; }
