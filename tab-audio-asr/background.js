@@ -355,6 +355,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           await archiveCurrentSession('reset');
           sendResponse(await resetSession());
           break;
+        case 'SHOW_PANEL': {
+          // 把已有稿子显示到页面：整段提取或旧会话都能用，不重新识别
+          let tabId = msg.tabId;
+          if (!tabId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab?.id;
+          }
+          const ok = tabId ? await injectSubtitle(tabId) : false;
+          sendResponse({ ok, error: ok ? null : '无法在这个页面注入字幕层' });
+          break;
+        }
+
         case 'HISTORY_INFO': {
           const { [LS_HISTORY]: hist } = await chrome.storage.local.get(LS_HISTORY);
           const list = Array.isArray(hist) ? hist : [];

@@ -87,6 +87,7 @@ function bindEvents() {
   el('srtBtn').addEventListener('click', exportSrt);
   el('resetBtn').addEventListener('click', resetSession);
   el('historyBtn').addEventListener('click', restoreHistory);
+  el('showPanelBtn').addEventListener('click', showPanel);
   el('correctBtn').addEventListener('click', correctAll);
   el('refineBtn').addEventListener('click', refineAll);
   el('saveAudioBtn').addEventListener('click', saveRecording);
@@ -725,6 +726,17 @@ function pickMediaUrl(report) {
   );
 }
 
+/* ------------------------------ 显示到页面 ------------------------------ */
+
+/** 把当前稿子显示到视频页面（不重新识别），整段提取完或旧会话都能用 */
+async function showPanel() {
+  const res = await chrome.runtime.sendMessage({ type: 'SHOW_PANEL', tabId: activeTab?.id }).catch((err) => ({
+    ok: false,
+    error: String(err?.message || err)
+  }));
+  if (!res?.ok) return note(`显示失败：${res?.error || '这个页面不允许注入'}`, 'err');
+  note('已把文字稿显示到页面上。浮窗可拖动、缩放，右上角 × 关闭。', 'ok');
+}
 /* ------------------------------ 历史稿 ------------------------------ */
 
 /** 有没有被覆盖/清空的旧稿，有就显示「恢复上一份」 */
@@ -995,6 +1007,7 @@ function note(text, kind = '') {
   box.className = 'note' + (kind ? ' ' + kind : '');
   el('hint').textContent = text;
 }
+
 
 
 
