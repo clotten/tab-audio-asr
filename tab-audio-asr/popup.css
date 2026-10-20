@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #0f1319;
   --card: #171d26;
   --card-2: #1e2631;
@@ -289,18 +289,12 @@ label.inline input {
 .tabPage { display: none; }
 .tabPage.active { display: block; }
 
-/* 设置页顶部的操作条：改完立刻能点，不用滚到底 */
-.stickyBar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
+/* 设置页顶部的操作条：放在最上面，但正常跟着内容滚动（不吸顶） */
+.actionBar {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 8px 12px;
-  margin-bottom: 4px;
-  background: var(--bg, #14181f);
-  border-bottom: 1px solid rgba(255,255,255,.06);
+  padding: 0 12px 8px;
 }
 
 /* 两组操作（整段提取 / 实时转录）的组标题 */
@@ -312,3 +306,4 @@ label.inline input {
   letter-spacing: .02em;
 }
 .group + .group { margin-top: 0; }
+

@@ -16,6 +16,7 @@
 
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="run">转录</button>
+      <button class="tab" data-tab="lib">字幕库</button>
       <button class="tab" data-tab="cfg">设置</button>
     </nav>
 
@@ -74,19 +75,6 @@
         <p class="note" id="liveNote"></p>
       </section>
 
-      <!-- 字幕库：单独一张卡 -->
-      <section class="card">
-        <p class="groupTitle">字幕库</p>
-        <div class="rowActions">
-          <select id="libSelect" title="按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
-            <option value="">字幕库（空）</option>
-          </select>
-          <button class="btn" id="libLoadBtn">加载</button>
-          <button class="btn ghost" id="libDelBtn">删除</button>
-        </div>
-        <p class="mini">整段提取跑完会自动入库；打开同一个视频时自动命中。</p>
-      </section>
-
       <!-- 文字稿 -->
       <section class="card">
         <div class="resultHead">
@@ -106,21 +94,35 @@
       </section>
     </section>
 
-    <!-- ==================== 设置页：改一次就不动 ==================== -->
+    <!-- ==================== 字幕库（独立标签页） ==================== -->
+    <section class="tabPage" data-page="lib">
+      <section class="card">
+        <p class="groupTitle">我的字幕库</p>
+        <div class="rowActions">
+          <select id="libSelect" title="按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
+            <option value="">字幕库（空）</option>
+          </select>
+        </div>
+        <div class="rowActions">
+          <button class="btn" id="libLoadBtn">加载到当前稿</button>
+          <button class="btn ghost" id="libDelBtn">删除这份</button>
+        </div>
+        <p class="mini">
+          整段提取跑完会自动入库；打开同一个视频时自动命中，不用再识别。
+          最多保留 80 份，超了淘汰最旧的。
+        </p>
+        <p class="note" id="libNote"></p>
+      </section>
+    </section>
+
+    <!-- ==================== 设置页 ==================== -->
     <section class="tabPage" data-page="cfg">
-      <div class="stickyBar">
+      <div class="actionBar">
         <button class="btn primary" id="saveBtn">保存设置</button>
         <button class="btn" id="testBtn">自测接口</button>
         <button class="btn" id="vadTestBtn" title="检查 Silero VAD 的运行时/模型是否正常">VAD 自检</button>
       </div>
       <p class="note" id="settingsNote"></p>
-
-      <section class="card">
-        <p class="sectLabel">术语表</p>
-        <label>一行一条；<code>错=>对</code> 会本地即时替换，其余作为纠错提示
-          <textarea id="glossary" rows="7" spellcheck="false"></textarea>
-        </label>
-      </section>
 
       <section class="card">
         <p class="sectLabel">接口</p>
@@ -131,7 +133,10 @@
       </section>
 
       <section class="card">
-        <p class="mini">视频页的悬浮字幕由「转录」页每个操作组里的「显示字幕」按钮打开；字号在「实时转录」组里。</p>
+        <p class="sectLabel">术语表</p>
+        <label>一行一条；<code>错=>对</code> 会本地即时替换，其余作为纠错提示
+          <textarea id="glossary" rows="7" spellcheck="false"></textarea>
+        </label>
       </section>
     </section>
 

@@ -76,7 +76,7 @@ let currentTab = 'run';
 
 /** 切换标签页（原来靠 <details> 往下展开，用户觉得难用） */
 function showTab(name) {
-  currentTab = name === 'cfg' ? 'cfg' : 'run';
+  currentTab = name === 'cfg' || name === 'lib' ? name : 'run';
   for (const btn of document.querySelectorAll('.tabs .tab')) {
     btn.classList.toggle('active', btn.dataset.tab === currentTab);
   }
@@ -800,6 +800,7 @@ async function refreshLibrary() {
 }
 
 async function loadFromLibrary() {
+  showTab('lib');
   const key = el('libSelect').value;
   if (!key) return note('字幕库是空的：先用「整段提取」跑一次，会自动存进去。', 'err');
 
@@ -816,6 +817,7 @@ async function loadFromLibrary() {
 }
 
 async function removeFromLibrary() {
+  showTab('lib');
   const key = el('libSelect').value;
   if (!key) return note('没有可删的条目。', 'err');
 
@@ -1103,7 +1105,7 @@ function setNoteSink(which) {
 function note(text, kind = '') {
   // 写到**当前标签页自己的**提示区（转录页 runNote / 设置页 settingsNote）；
   // 之前两页共用一处，导致一条消息两个页面都能看到。
-  const box = el(currentTab === 'cfg' ? 'settingsNote' : noteSink);
+  const box = currentTab === 'cfg' ? el('settingsNote') : currentTab === 'lib' ? el('libNote') : el(noteSink);
   if (box) {
     box.textContent = text;
     box.className = 'note' + (kind ? ' ' + kind : '');
@@ -1113,6 +1115,8 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
+
 
 
 
