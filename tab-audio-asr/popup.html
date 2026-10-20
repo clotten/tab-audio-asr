@@ -92,6 +92,13 @@
         <button class="btn" id="historyBtn" hidden title="把上一份被覆盖或清空的稿子找回来">恢复上一份</button>
         <button class="btn ghost" id="resetBtn">清空</button>
       </div>
+      <div class="rowActions">
+        <select id="libSelect" title="字幕库：按视频保存的稿子" style="flex:1 1 auto;min-width:120px;background:rgba(0,0,0,.35);color:#e9eef5;border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 6px;font-size:12px;">
+          <option value="">字幕库（空）</option>
+        </select>
+        <button class="btn" id="libLoadBtn">加载</button>
+        <button class="btn ghost" id="libDelBtn">删除</button>
+      </div>
     </section>
 
     <footer>
@@ -102,6 +109,7 @@
     <script type="module" src="popup.js"></script>
   </body>
 </html>
+
 
 
 

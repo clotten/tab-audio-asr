@@ -17,6 +17,7 @@ import { createWavWriter, readAudioFile } from './lib/audiofile.js';
 import { looksLikeHallucination } from './lib/hallucination.js';
 import { createSileroVad, createSileroGate } from './lib/silero.js';
 import { planInterim, stripCommittedOverlap } from './lib/incremental.js';
+import { buildDoc } from './lib/docstore.js';
 import { detectSpeechRegions, createStreamingSegmenter } from './lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -1178,6 +1179,31 @@ const INGEST_MAX_SECONDS = 45 * 60;
  * 就没必要"录声音"，直接把文件下载下来解码、整段转写，播放前就能拿到全稿。
  * 时间轴天然对齐（相对文件开头），比录制推算更准。
  */
+/**
+ * 把这次的结果异步存进「字幕库」（按 videoKey）。
+ * 不 await —— 存库慢不该拖住"已完成"状态；失败也只记进 diag。
+ */
+function waitSaveDoc(items) {
+  const key = state?.videoKey;
+  if (!key) return;
+
+  const doc = buildDoc({
+    key,
+    segments: items,
+    model: state.model || settings.model || '',
+    title: state.tabTitle || state.diag?.ingestUrl || '',
+    durationMs: state.diag?.ingestDurationMs || 0,
+    createdAt: Date.now()
+  });
+  if (!doc) return;
+
+  chrome.runtime
+    .sendMessage({ type: 'DOC_SAVE', doc })
+    .then((res) => {
+      if (state) state.diag.librarySaved = !!res?.ok;
+    })
+    .catch(() => {});
+}
 function startIngest(url, videoKey) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
@@ -1277,6 +1303,9 @@ async function runIngest(url) {
     if (!items.length) throw new Error('没有识别出任何内容（可能整段都是音乐）');
 
     state.segments = items;
+
+    // 自动存进「字幕库」：下次打开同一个视频就不用重新提取
+    waitSaveDoc(items);
     state.status = 'stopped';
     state.stoppedAt = Date.now();
     state.diag.ingesting = false;
@@ -1686,6 +1715,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
 
 
 

@@ -29,6 +29,7 @@ import { looksLikeHallucination } from '../lib/hallucination.js';
 import { createWavWriter, readAudioFile } from '../lib/audiofile.js';
 import { createSileroVad, createSileroGate } from '../lib/silero.js';
 import { planInterim, stripCommittedOverlap } from '../lib/incremental.js';
+import { buildDoc, getDoc, upsertDoc, listDocs, removeDoc, sanitizeDocs } from '../lib/docstore.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -456,7 +457,7 @@ const fakeStorage = {
 /* ============================ 加载两个上下文 ============================ */
 
 // 去掉 ESM import（vm 里不是模块环境，单行和多行都要处理），改由上下文注入真实实现
-const offscreenSource = readFileSync(join(root, 'offscreen.js'), 'utf8').replace(
+const offscreenSource = readFileSync(join(root, 'offscreen.js'), 'utf8').replace(/\r\n/g, '\n').replace(
   /^import[\s\S]*?from\s+'[^']+';$/gm,
   ''
 );
@@ -496,6 +497,7 @@ const offscreenCtx = vm.createContext({
   createSileroGate,
   planInterim,
   stripCommittedOverlap,
+  buildDoc,
   // 注入时绑定假 OPFS：库代码里的 navigator 会解析到 Node 域的全局对象，
   // 必须由外层把 fakeStorage 闭包传进去
   createWavWriter: (name, rate) => createWavWriter(name, rate, fakeStorage),
@@ -505,6 +507,12 @@ const offscreenCtx = vm.createContext({
 vm.runInContext(offscreenSource, offscreenCtx, { filename: 'offscreen.js' });
 
 const swCtx = vm.createContext({
+  // background.js 的 import 被剥掉了，这里把真实实现注入回来
+  getDoc,
+  upsertDoc,
+  listDocs,
+  removeDoc,
+  sanitizeDocs,
   chrome: swChrome,
   console,
   setTimeout,
@@ -513,7 +521,10 @@ const swCtx = vm.createContext({
   clearInterval
 });
 
-vm.runInContext(readFileSync(join(root, 'background.js'), 'utf8'), swCtx, { filename: 'background.js' });
+const backgroundSource = readFileSync(join(root, 'background.js'), 'utf8')
+  .replace(/\r\n/g, '\n')
+  .replace(/^import[\s\S]*?from\s+'[^']+';$/gm, '');
+vm.runInContext(backgroundSource, swCtx, { filename: 'background.js' });
 
 /* ============================ 开始演练 ============================ */
 
@@ -936,6 +947,9 @@ if (failed) {
 }
 console.log('全部通过：消息流、状态落盘、分段上传、停止/清空都正常。');
 process.exit(0);
+
+
+
 
 
 

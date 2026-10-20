@@ -10,6 +10,14 @@
  * 回收（MV3 常态，30 秒空闲就杀），长录音也不会中断。
  */
 
+import { buildDoc, getDoc, upsertDoc, listDocs, removeDoc, sanitizeDocs } from './lib/docstore.js';
+
+// 频道里给上面几个起短名，避免和消息分支里的局部变量重名
+const docUpsert = upsertDoc;
+const docGet = getDoc;
+const docList = listDocs;
+const docRemove = removeDoc;
+
 const OFFSCREEN_URL = 'offscreen.html';
 const LS_SESSION = 'asrSession';
 const LS_HISTORY = 'asrHistory';
@@ -367,6 +375,61 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }
           const ok = tabId ? await injectSubtitle(tabId) : false;
           sendResponse({ ok, error: ok ? null : '无法在这个页面注入字幕层' });
+          break;
+        }
+
+        case 'DOC_SAVE': {
+          // 字幕库：按视频 key 存一份稿子（面板/弹窗都可触发）
+          const { asrDocs: cur0 } = await chrome.storage.local.get('asrDocs');
+          const nextDocs = docUpsert(sanitizeDocs(cur0), msg.doc);
+          await chrome.storage.local.set({ asrDocs: nextDocs });
+          sendResponse({ ok: true, total: Object.keys(nextDocs).length });
+          break;
+        }
+
+        case 'DOC_LIST': {
+          const { asrDocs: cur1 } = await chrome.storage.local.get('asrDocs');
+          sendResponse({ ok: true, items: docList(sanitizeDocs(cur1)) });
+          break;
+        }
+
+        case 'DOC_LOAD': {
+          // 把字幕库里的一份稿子提升为当前会话（面板/弹窗立刻可见）
+          const { asrDocs: cur2 } = await chrome.storage.local.get('asrDocs');
+          const doc = docGet(sanitizeDocs(cur2), msg.key);
+          if (!doc) {
+            sendResponse({ ok: false, error: '字幕库里没有这个视频' });
+            break;
+          }
+          const session = {
+            status: 'stopped',
+            tabId: null,
+            tabTitle: doc.title || '',
+            startedAt: doc.createdAt || Date.now(),
+            stoppedAt: Date.now(),
+            segments: doc.segments.map((s, idx) => ({ ...s, index: idx, status: 'done' })),
+            transcript: doc.segments.map((s) => s.text).join('\\n'),
+            pending: 0,
+            done: doc.count,
+            failed: 0,
+            skipped: 0,
+            model: doc.model || '',
+            lastError: '',
+            partial: null,
+            videoKey: doc.key,
+            diag: { source: 'url', ingestPhase: 'done', fromLibrary: true }
+          };
+          await chrome.storage.local.set({ [LS_SESSION]: session });
+          refreshBadge('stopped');
+          sendResponse({ ok: true, count: doc.count, title: doc.title || '' });
+          break;
+        }
+
+        case 'DOC_REMOVE': {
+          const { asrDocs: cur3 } = await chrome.storage.local.get('asrDocs');
+          const left = docRemove(sanitizeDocs(cur3), msg.key);
+          await chrome.storage.local.set({ asrDocs: left });
+          sendResponse({ ok: true, total: Object.keys(left).length });
           break;
         }
 

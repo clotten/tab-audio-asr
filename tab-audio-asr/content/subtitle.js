@@ -1,4 +1,4 @@
-﻿/**
+/**
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -93,6 +93,7 @@
     } catch {
       href = '';
     }
+
     let base = href;
     try {
       const u = new URL(href);
@@ -110,6 +111,17 @@
 
     return duration == null ? base : `${base}#${duration}s`;
   }
+
+  // 每页只问一次字幕库，避免反复发消息
+  let libraryCheckedFor = '';
+
+  /** 本页没有稿子时，试着从「字幕库」取同一视频以前存的那份 */
+  function maybeLoadFromLibrary(key) {
+    if (!key || libraryCheckedFor === key) return;
+    libraryCheckedFor = key;
+    chrome.runtime.sendMessage({ type: 'DOC_LOAD', key }).catch(() => {});
+  }
+
   const MAX_ROWS = 400;
 
   const DEFAULT_SUB = {
@@ -1017,6 +1029,8 @@
     // 字幕必须按视频隔离：稿子属于别的视频时，一个字都不显示
     const keyNow = pageVideoKey();
     const foreign = !!session.videoKey && session.videoKey !== keyNow;
+    // 本页的稿子不在库里时，试着从「字幕库」取一份（同一视频以前提取过）
+    if (foreign && keyNow) maybeLoadFromLibrary(keyNow);
     if (foreign) {
       parts.empty.textContent = '本页还没有对应的文字稿（不显示其他视频的字幕）。在插件里点「整段提取」或「开始转录」。';
     } else {

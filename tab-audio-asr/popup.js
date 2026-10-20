@@ -53,6 +53,7 @@ async function init() {
 
   // 有没有被覆盖的旧稿，决定「恢复上一份」显不显示
   await refreshHistory();
+  await refreshLibrary();
 
   if (!settings.apiKey) el('settingsBox').open = true;
 
@@ -88,6 +89,8 @@ function bindEvents() {
   el('srtBtn').addEventListener('click', exportSrt);
   el('resetBtn').addEventListener('click', resetSession);
   el('historyBtn').addEventListener('click', restoreHistory);
+  el('libLoadBtn').addEventListener('click', loadFromLibrary);
+  el('libDelBtn').addEventListener('click', removeFromLibrary);
   el('showPanelBtn').addEventListener('click', showPanel);
   el('correctBtn').addEventListener('click', correctAll);
   el('refineBtn').addEventListener('click', refineAll);
@@ -586,6 +589,7 @@ async function stop() {
   render();
 
   await refreshHistory();
+  await refreshLibrary();
   const canRefine = !!session?.diag?.audioFile && !session?.refined;
   el('hint').textContent = canRefine
     ? '已停止。点「离线精校」能按长上下文重跑一遍，比实时准很多。'
@@ -601,6 +605,7 @@ async function resetSession() {
   session = null;
   render();
   await refreshHistory();
+  await refreshLibrary();
   note('已清空（旧稿已存进历史，可点「恢复上一份」找回）。', 'ok');
 }
 
@@ -756,6 +761,69 @@ async function showPanel() {
   if (!res?.ok) return note(`显示失败：${res?.error || '这个页面不允许注入'}`, 'err');
   note('已把文字稿显示到页面上。浮窗可拖动、缩放，右上角 × 关闭。', 'ok');
 }
+/* ------------------------------ 字幕库 ------------------------------ */
+
+let libraryItems = [];
+
+async function refreshLibrary() {
+  const res = await chrome.runtime.sendMessage({ type: 'DOC_LIST' }).catch(() => null);
+  libraryItems = res?.ok ? res.items || [] : [];
+
+  const sel = el('libSelect');
+  if (!sel) return;
+  sel.textContent = '';
+
+  if (!libraryItems.length) {
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = '字幕库（空）';
+    sel.appendChild(o);
+    return;
+  }
+
+  for (const it of libraryItems) {
+    const o = document.createElement('option');
+    o.value = it.key;
+    const when = it.createdAt ? new Date(it.createdAt).toLocaleDateString() : '';
+    const title = (it.title || it.key).slice(0, 40);
+    o.textContent = `${title} · ${it.count} 句${when ? ` · ${when}` : ''}`;
+    sel.appendChild(o);
+  }
+
+  // 默认选中当前会话对应的那份
+  if (session?.videoKey && libraryItems.some((x) => x.key === session.videoKey)) {
+    sel.value = session.videoKey;
+  }
+}
+
+async function loadFromLibrary() {
+  const key = el('libSelect').value;
+  if (!key) return note('字幕库是空的：先用「整段提取」跑一次，会自动存进去。', 'err');
+
+  const res = await chrome.runtime.sendMessage({ type: 'DOC_LOAD', key }).catch((err) => ({
+    ok: false,
+    error: String(err?.message || err)
+  }));
+  if (!res?.ok) return note(`加载失败：${res?.error || '未知'}`, 'err');
+
+  const { asrSession } = await chrome.storage.local.get('asrSession');
+  session = asrSession || session;
+  render();
+  note(`已从字幕库加载：${res.count} 句${res.title ? `（${res.title.slice(0, 50)}）` : ''}`, 'ok');
+}
+
+async function removeFromLibrary() {
+  const key = el('libSelect').value;
+  if (!key) return note('没有可删的条目。', 'err');
+
+  const res = await chrome.runtime.sendMessage({ type: 'DOC_REMOVE', key }).catch(() => null);
+  if (!res?.ok) return note('删除失败。', 'err');
+
+  await refreshLibrary();
+  note(`已删除，库里还剩 ${res.total} 份。`, 'ok');
+}
+
+
 /* ------------------------------ 历史稿 ------------------------------ */
 
 /** 有没有被覆盖/清空的旧稿，有就显示「恢复上一份」 */
@@ -789,6 +857,7 @@ async function restoreHistory() {
   session = asrSession || session;
   render();
   await refreshHistory();
+  await refreshLibrary();
   note(`已恢复上一份稿子：${res.count} 句${res.title ? `（${res.title.slice(0, 60)}）` : ''}`, 'ok');
 }
 
