@@ -698,6 +698,16 @@ async function ingestFromPage() {
     render();
     return;
   }
+  // DNR 的 modifyHeaders 需要目标域名权限，否则规则被静默忽略 →
+  // CDN 收不到 Referer，直接 403（B 站踩过）。所以下载前先要权限。
+  if (lastMediaUrl) {
+    const okPerm = await ensureHostPermission(lastMediaUrl);
+    if (!okPerm) {
+      note('没拿到媒体域名的访问权限，CDN 会拒绝下载（403）。请在弹窗的授权提示里点「允许」后重试。', 'err');
+      return;
+    }
+  }
+
   const btn = el('ingestBtn');
   btn.disabled = true;
   btn.textContent = '准备中…';
@@ -740,8 +750,13 @@ async function ingestFromPage() {
         error: String(err?.message || err)
       }));
 
-    if (!res?.ok) note(`整段提取没能开始：${res?.error || '未知错误'}`, 'err');
-    else note('已在后台开始整段提取，可以关掉弹窗，跑完会写进文字稿。');
+    if (!res?.ok) {
+      // cdnHeaders/cdnRules 是排查 403 的关键：规则没装上时，CDN 就收不到 Referer
+      const diag = `［Referer 规则：${res?.cdnHeaders ? '已装' : '未装'}（${res?.cdnRules ?? '?'} 条）］`;
+      note(`整段提取没能开始：${res?.error || '未知错误'} ${diag}`, 'err');
+    } else {
+      note('已在后台开始整段提取，可以关掉弹窗，跑完会写进文字稿。');
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = '整段提取（不用等播放）';

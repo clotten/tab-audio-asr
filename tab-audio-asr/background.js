@@ -1,4 +1,4 @@
-/**
+﻿/**
  * background.js —— MV3 Service Worker
  *
  * 职责很窄，只做三件事：
@@ -603,6 +603,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // videoKey 必须一起转：offscreen 靠它决定「这份稿子属于哪个视频」并入库
           // CDN 可能校验 Referer（B 站的 bilivideo 就是），fetch 里写不了，只能靠 DNR 装规则
           const cdnApplied = await applyCdnHeaders(msg.url);
+          // 顺便回一下规则条数：规则要是没装上，403 就无从解释
+          let cdnRules = 0;
+          try {
+            cdnRules = (await chrome.declarativeNetRequest.getSessionRules()).length;
+          } catch {
+            cdnRules = -1;
+          }
           const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url, videoKey: msg.videoKey }).catch((err) => ({
             ok: false,
             error: `后台页面未响应：${String(err?.message || err)}`
@@ -611,9 +618,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // 整段提取不走录制，所以字幕层要在这里补注入，否则页面上一片空白
           if (res?.ok && msg.tabId) {
             const ok = await injectSubtitle(msg.tabId);
-            sendResponse({ ...res, cdnHeaders: cdnApplied, subtitle: ok });
+            sendResponse({ ...res, cdnHeaders: cdnApplied, cdnRules, subtitle: ok });
           } else {
-            sendResponse({ ...(res || { ok: false, error: '没有响应' }), cdnHeaders: cdnApplied });
+            sendResponse({ ...(res || { ok: false, error: '没有响应' }), cdnHeaders: cdnApplied, cdnRules });
           }
           break;
         }

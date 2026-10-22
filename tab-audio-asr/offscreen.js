@@ -1284,7 +1284,16 @@ async function runIngest(url, myToken) {
         404: '地址失效（B 站的签名 URL 有效期很短，过几分钟就会 404，重开播放页再提取）',
         412: 'CDN 拒绝（多半是 Referer/防盗链）'
       };
-      throw new Error(`下载失败 HTTP ${res.status}${hints[res.status] ? '：' + hints[res.status] : ''}`);
+      // 把 CDN 的响应体也带出来：B 站会回 JSON 说明到底哪一步不合法
+      let body = '';
+      try {
+        body = (await res.text()).slice(0, 200);
+      } catch {
+        body = '';
+      }
+      throw new Error(
+        `下载失败 HTTP ${res.status}${hints[res.status] ? '：' + hints[res.status] : ''}${body ? '｜响应：' + body : ''}`
+      );
     }
 
     const buf = await res.arrayBuffer();
@@ -1763,6 +1772,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
 
 
 
