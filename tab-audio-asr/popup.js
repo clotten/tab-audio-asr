@@ -1,4 +1,4 @@
-/**
+﻿/**
  * popup.js —— 界面层：只管显示和发指令，不碰音频。
  * 采集/编码/请求都在 offscreen.js 里，所以关掉这个弹窗也不会中断转录。
  */
@@ -742,6 +742,7 @@ async function ingestFromPage() {
     if (stale) {
       note(lastProbe ? '页面已经换成别的视频了，重新探测一次…' : '先探测页面，找可下载的媒体链接…');
       const fresh = await refreshProbe();
+      if (!fresh.ok) return note('探测失败：' + (fresh.error || '未知'), 'err');
       if (!fresh) {
         return note('这个页面没找到可下载的直链（可能是 MSE/blob:）。\n先用「开始转录」实时录，或者点播放几秒后再点「探测本页媒体」。', 'err');
       }
@@ -992,6 +993,10 @@ async function resolveMediaUrl(report) {
   ];
 
   const unique = [...new Set(candidates)].slice(0, 8);
+  // 必须在 PICK_MEDIA 之前把域名权限拿到：DNR 的 Referer 规则没有 host 权限会被忽略，
+  // 于是 HEAD 直接被 CDN 拒（403），候选全军覆没 → 「选用ID=无」（真机踩过）。
+  if (unique.length) await ensureHostPermission(unique[0]).catch(() => false);
+
   if (unique.length) {
     const picked = await chrome.runtime.sendMessage({ type: 'PICK_MEDIA', urls: unique }).catch(() => null);
     if (picked?.ok && picked.best?.url) {

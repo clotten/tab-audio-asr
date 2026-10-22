@@ -1,4 +1,4 @@
-/**
+﻿/**
  * background.js —— MV3 Service Worker
  *
  * 职责很窄，只做三件事：
@@ -395,9 +395,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           for (const u of urls) {
             try {
               const r = await fetch(u, { method: 'HEAD' });
-              const type = (r.headers.get('content-type') || '').toLowerCase();
-              const size = Number(r.headers.get('content-length') || 0);
-              probed.push({ url: u, status: r.status, type, size, ok: r.ok });
+              let type = (r.headers.get('content-type') || '').toLowerCase();
+              let size = Number(r.headers.get('content-length') || 0);
+              let status = r.status;
+
+              // 不少 CDN 不认 HEAD（直接 403/405）。退回 GET 只取前 2KB，
+              // 从 content-range 里读出总长度——效果一样，代价几 KB。
+              if (!r.ok || !type || !size) {
+                try {
+                  const g = await fetch(u, { headers: { Range: 'bytes=0-2047' } });
+                  if (g.ok || g.status === 206) {
+                    const gt = (g.headers.get('content-type') || '').toLowerCase();
+                    const cr = g.headers.get('content-range') || '';
+                    const total = Number((cr.match(/\/(\d+)$/) || [])[1] || 0);
+                    if (gt) type = gt;
+                    if (total) size = total;
+                    status = g.status;
+                  }
+                  // 立刻放掉响应体，别真的下整段
+                  g.body?.cancel?.().catch?.(() => {});
+                } catch {
+                  /* 退回也失败就按原结果打分 */
+                }
+              }
+
+              probed.push({ url: u, status, type, size, ok: status === 200 || status === 206 });
             } catch (err) {
               probed.push({ url: u, error: String(err?.message || err), ok: false });
             }
