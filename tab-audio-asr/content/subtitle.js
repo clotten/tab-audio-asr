@@ -1158,7 +1158,7 @@
   /** SW 在「显示到页面」时会发这条，用来压掉空闲自动隐藏 */
   function listenShowForce() {
     try {
-      chrome.runtime.onMessage.addListener((msg) => {
+      chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // 弹窗把诊断日志发到页面控制台（页面控制台关弹窗后还在，排查方便）
         // 在页面上下文里检查候选媒体地址：这里发出请求天然带页面 Referer，
         // 而且 CDN 给页面开了 CORS（实测 HEAD 200），不像扩展请求那样受权限限制。
