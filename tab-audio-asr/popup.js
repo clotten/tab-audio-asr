@@ -32,6 +32,7 @@ let settings = { ...DEFAULTS };
 let session = null;
 let lastProbe = null;
 let lastMediaUrl = '';
+let confirmBigRun = false; // 长视频二次确认
 let activeTab = null;
 let ticker = null;
 let busy = false;
@@ -753,6 +754,19 @@ async function ingestFromPage() {
     }
 
     mlog('整段提取 · 即将下载ID=' + mediaId(url) + ' · 完整地址=' + url);
+    // 花钱前给个明白账：长视频分段多，误点一次挺贵的（真金白银踩过）
+    const durSec = Math.round(lastProbe?.videos?.find((v) => v.duration)?.duration || 0);
+    const estReqs = durSec ? Math.ceil(durSec / 20) : 0;
+    if (durSec > 600 && !confirmBigRun) {
+      confirmBigRun = true;
+      return note(
+        `这个视频 ${Math.round(durSec / 60)} 分钟，整段提取大约要发 ${estReqs} 次识别请求（按用量计费）。\n` +
+          '确认要跑就再点一次「整段提取」；想省钱可以等闲时价位再跑。',
+        'err'
+      );
+    }
+    confirmBigRun = false;
+
     const url = lastMediaUrl;
     if (!url) return note('这个页面没挑出可用的音轨地址：先点播放几秒让播放器真的去取流，再点「探测本页媒体」；\n如果一直挑不出，说明 CDN 拒绝了探测（多半是权限/防盗链），告诉我探测结果里「选用：」那行。', 'err');
 
