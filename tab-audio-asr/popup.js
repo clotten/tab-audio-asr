@@ -698,40 +698,36 @@ async function ingestFromPage() {
     render();
     return;
   }
-  // DNR 的 modifyHeaders 需要目标域名权限，否则规则被静默忽略 →
-  // CDN 收不到 Referer，直接 403（B 站踩过）。所以下载前先要权限。
-  if (lastMediaUrl) {
-    const okPerm = await ensureHostPermission(lastMediaUrl);
-    if (!okPerm) {
-      note('没拿到媒体域名的访问权限，CDN 会拒绝下载（403）。请在弹窗的授权提示里点「允许」后重试。', 'err');
-      return;
-    }
-  }
 
   const btn = el('ingestBtn');
   btn.disabled = true;
   btn.textContent = '准备中…';
 
   try {
-    let url = lastMediaUrl;
+    /* --- 1. 先确认探测结果是"这一页"的 ---
+     * B 站这类站是单页应用：换视频时 URL 变了但页面没刷新。
+     * 兜里的 lastProbe 还是上一个视频的（连带的签名地址也可能已过期），
+     * 直接用就会 403，或者更糟：把上一个视频的音频转出来（真实踩过）。 */
+    const tabNow = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+    const pageUrl = tabNow?.[0]?.url || '';
+    const stale = !lastProbe || !lastMediaUrl || (pageUrl && lastProbe.url !== pageUrl);
 
-    // 没探测过就先探一次，省得用户多点一下
-    if (!url) {
-      note('先探测页面，找可下载的媒体链接…');
-      const probe = await chrome.runtime.sendMessage({ type: 'PROBE_MEDIA' }).catch((err) => ({
-        ok: false,
-        error: String(err?.message || err)
-      }));
-      if (!probe?.ok) return note(`探测失败：${probe?.error || '未知'}`, 'err');
-
-      lastProbe = probe.report || null;
-      url = pickMediaUrl(lastProbe);
-      if (!url) {
-        return note(
-          '这个页面没找到可下载的直链（可能是 MSE/blob:）。\n先用「开始转录」实时录，或者点播放几秒后再点「探测本页媒体」。',
-          'err'
-        );
+    if (stale) {
+      note(lastProbe ? '页面已经换成别的视频了，重新探测一次…' : '先探测页面，找可下载的媒体链接…');
+      const fresh = await refreshProbe();
+      if (!fresh) {
+        return note('这个页面没找到可下载的直链（可能是 MSE/blob:）。\n先用「开始转录」实时录，或者点播放几秒后再点「探测本页媒体」。', 'err');
       }
+    }
+
+    const url = lastMediaUrl;
+    if (!url) return note('没拿到媒体地址，先点「探测本页媒体」。', 'err');
+
+    /* --- 2. 下载权限：DNR 的 modifyHeaders 需要目标域名权限，
+     * 否则规则被静默忽略 → CDN 收不到 Referer → 403（B 站踩过）。 --- */
+    const okPerm = await ensureHostPermission(url);
+    if (!okPerm) {
+      return note('没拿到媒体域名的访问权限，CDN 会拒绝下载（403）。请在授权提示里点「允许」后重试。', 'err');
     }
 
     note(`开始整段提取：\n${url.slice(0, 120)}\n下载 → 解码 → 转写，进度会显示在下方。`);
@@ -915,13 +911,13 @@ async function restoreHistory() {
  * 问页面："能不能整段提取？"
  * 结果决定走哪条路：现成字幕 > 直链文件 > HLS/DASH 分片 > 只能实时录。
  */
-async function probeMedia() {
-  setNoteSink('doc');
-  const btn = el('probeBtn');
-  btn.disabled = true;
-  btn.textContent = '探测中…';
-  note('正在检查这个页面能不能整段提取（刚打开页面的话，先点播放几秒再探测更准）…');
-
+/**
+ * 探测当前页并记住结果，返回 { ok, url, report, error }。
+ * 抽成函数是因为两处都要用：点「探测本页媒体」，以及「整段提取」发现结果过期时自动重探。
+ * 记住的 lastMediaUrl 只对**这一页**有效——B 站换视频不刷新页面（单页应用），
+ * 用旧地址轻则 403，重则把上一个视频的音频转出来（真机踩过）。
+ */
+async function refreshProbe() {
   let res;
   try {
     res = await chrome.runtime.sendMessage({ type: 'PROBE_MEDIA' });
@@ -929,19 +925,36 @@ async function probeMedia() {
     res = { ok: false, error: String(err?.message || err) };
   }
 
-  btn.disabled = false;
-  btn.textContent = '探测本页媒体';
-
-  if (!res?.ok) return note(`探测失败：${res?.error || '未知错误'}`, 'err');
+  if (!res?.ok || !res.report) {
+    lastProbe = null;
+    lastMediaUrl = '';
+    return { ok: false, error: res?.error || '没有返回结果', report: null, url: '' };
+  }
 
   const r = res.report;
-  if (!r) return note('探测没有返回结果（页面可能不允许注入脚本）', 'err');
-
-  // 记住探测结果：`整段提取` 直接用，不用再探一次
   // 平台播放信息（主世界读到的页面 JS 变量）并进报告，后续统一按 report 用
   if (res.playinfo) r.playinfo = res.playinfo;
   lastProbe = r;
   lastMediaUrl = pickMediaUrl(r);
+  return { ok: true, error: '', report: r, url: lastMediaUrl };
+}
+
+async function probeMedia() {
+  setNoteSink('doc');
+  const btn = el('probeBtn');
+  btn.disabled = true;
+  btn.textContent = '探测中…';
+  note('正在检查这个页面能不能整段提取（刚打开页面的话，先点播放几秒再探测更准）…');
+
+  const out = await refreshProbe();
+
+  btn.disabled = false;
+  btn.textContent = '探测本页媒体';
+
+  if (!out.ok) return note(`探测失败：${out.error || '未知错误'}`, 'err');
+
+  const r = out.report;
+  if (!r) return note('探测没有返回结果（页面可能不允许注入脚本）', 'err');
 
   const label =
     {
