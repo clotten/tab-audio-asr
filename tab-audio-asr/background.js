@@ -309,7 +309,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
 
         case 'PROBE_MEDIA': {
-          // 探测当前页能不能整段提取（直链 / HLS / DASH / 现成字幕），
+          // 探测当前页能不能整段提取（直链 / HLS / DASH / 现成字幕 / 平台播放信息），
           // 用来判断"能不能播之前就拿到全稿"。
           let tabId = msg.tabId;
           if (!tabId) {
@@ -321,11 +321,53 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             break;
           }
           try {
+            // ① 常规探测（隔离世界，能读 performance / DOM）
             const [res] = await chrome.scripting.executeScript({
               target: { tabId },
               files: ['content/probe.js']
             });
-            sendResponse({ ok: true, report: res?.result || null });
+            const report = res?.result || null;
+
+            // ② 平台播放信息（主世界，能读页面 JS 变量）
+            //    B 站这类站点不吐 m3u8/mpd 清单，音频地址藏在 window.__playinfo__ 的 DASH JSON 里，
+            //    必须进主世界才看得到。
+            let playinfo = null;
+            try {
+              const [pm] = await chrome.scripting.executeScript({
+                target: { tabId },
+                world: 'MAIN',
+                func: () => {
+                  const pick = (obj) => (obj && (obj.baseUrl || obj.base_url || (Array.isArray(obj.backupUrl) ? obj.backupUrl[0] : ''))) || '';
+                  const out = { audio: '', video: '', duration: null, source: '' };
+
+                  // B 站：window.__playinfo__ = { data: { dash: { audio: [...], video: [...] }, durl: [...] } }
+                  const pi = window.__playinfo__;
+                  const data = pi && pi.data;
+                  if (data) {
+                    out.source = '__playinfo__';
+                    const audio = data.dash && Array.isArray(data.dash.audio) ? data.dash.audio.slice() : [];
+                    audio.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0)); // 取最高码率的音轨
+                    out.audio = pick(audio[0]);
+                    const video = data.dash && Array.isArray(data.dash.video) ? data.dash.video.slice() : [];
+                    video.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+                    out.video = pick(video[0]);
+                    if (!out.audio && Array.isArray(data.durl) && data.durl[0]) {
+                      // 老式单文件 MP4
+                      out.audio = data.durl[0].url || '';
+                      out.video = out.audio;
+                    }
+                    const el = document.querySelector('video');
+                    out.duration = el && Number.isFinite(el.duration) ? Math.round(el.duration) : null;
+                  }
+                  return out;
+                }
+              });
+              playinfo = pm?.result || null;
+            } catch {
+              playinfo = null;
+            }
+
+            sendResponse({ ok: true, report, playinfo });
           } catch (err) {
             sendResponse({ ok: false, error: `无法探测这个页面：${String(err?.message || err)}` });
           }

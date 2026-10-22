@@ -1,4 +1,4 @@
-﻿/**
+/**
  * popup.js —— 界面层：只管显示和发指令，不碰音频。
  * 采集/编码/请求都在 offscreen.js 里，所以关掉这个弹窗也不会中断转录。
  */
@@ -752,6 +752,10 @@ async function ingestFromPage() {
 function pickMediaUrl(report) {
   if (!report) return '';
   const first = (arr) => (arr && arr.length ? arr[0].url || arr[0].src || '' : '');
+
+  // 平台播放信息（B 站 __playinfo__ 之类）：直接就是音轨/整段地址，优先级最高
+  const platform = report.playinfo && (report.playinfo.audio || report.playinfo.video);
+  if (platform && /^https?:/i.test(platform)) return platform;
   const tracks = (report.tracks || []).map((t) => t.src).filter(Boolean);
 
   // 直链 mp4/mp3/m4a 优先；其次 m3u8（后续可做分片拼接）；字幕轨先不算（要单独解析）
@@ -919,6 +923,8 @@ async function probeMedia() {
   if (!r) return note('探测没有返回结果（页面可能不允许注入脚本）', 'err');
 
   // 记住探测结果：`整段提取` 直接用，不用再探一次
+  // 平台播放信息（主世界读到的页面 JS 变量）并进报告，后续统一按 report 用
+  if (res.playinfo) r.playinfo = res.playinfo;
   lastProbe = r;
   lastMediaUrl = pickMediaUrl(r);
 
@@ -928,7 +934,7 @@ async function probeMedia() {
       hls: '✅ 有 m3u8 播放列表 → 可下载全部分片，播之前就转完',
       dash: '✅ 有 DASH 清单 → 可只下音频分片，播之前就转完',
       direct: '✅ 有直链媒体文件 → 可整段下载后转写',
-      mse: '⚠️ 播放器用 MSE + blob:，没有稳定直链 → 目前只能实时录',
+      mse: '⚠️ 播放器用 MSE + blob:，没有稳定直链 → 只能实时录；但若下面读到平台音轨，就能整段提取',
       unknown: '⚠️ 没抓到媒体请求（先播放几秒再试）'
     }[r.mode] || r.mode;
 
@@ -941,6 +947,12 @@ async function probeMedia() {
     `<video> ${(r.videos || []).length}`
   ].join(' · ');
 
+  // 读到平台播放信息就明说——这是 MSE 页面唯一的整段提取出路
+  const platformAudio = r.playinfo?.audio || r.playinfo?.video || "";
+  const platformLine = platformAudio
+    ? ` · 平台音轨 ${platformAudio.slice(0, 60)}…（可整段提取）`
+    : "";
+
   const sample = [
     ...(r.media?.hls || []).slice(0, 1),
     ...(r.media?.dash || []).slice(0, 1),
@@ -951,9 +963,10 @@ async function probeMedia() {
     .filter(Boolean)
     .slice(0, 3);
 
-  const ok = ['subtitle', 'hls', 'dash', 'direct'].includes(r.mode);
+  const ok = ['subtitle', 'hls', 'dash', 'direct'].includes(r.mode) || !!platformAudio;
+  const detail = (r.reasons || []).join('\n');
   note(
-    `【${r.platform}】${label}\n计数：${counts}\n${(r.reasons || []).join('\n')}` +
+    `${r.platform}｜${label}${platformLine}\n计数：${counts}\n${detail}` +
       (sample.length ? `\n链接：\n${sample.join('\n')}` : ''),
     ok ? 'ok' : 'err'
   );
@@ -1142,6 +1155,7 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
 
 
 
