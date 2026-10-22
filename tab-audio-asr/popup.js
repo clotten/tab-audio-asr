@@ -748,12 +748,13 @@ async function ingestFromPage() {
       note(lastProbe ? '页面已经换成别的视频了，重新探测一次…' : '先探测页面，找可下载的媒体链接…');
       const fresh = await refreshProbe();
       if (!fresh.ok) return note('探测失败：' + (fresh.error || '未知'), 'err');
-      if (!fresh) {
-        return note('这个页面没找到可下载的直链（可能是 MSE/blob:）。\n先用「开始转录」实时录，或者点播放几秒后再点「探测本页媒体」。', 'err');
-      }
     }
 
+    const url = lastMediaUrl;
+    if (!url) return note('这个页面没挑出可用的音轨地址：先点播放几秒让播放器真的去取流，再点「探测本页媒体」。', 'err');
+
     mlog('整段提取 · 即将下载ID=' + mediaId(url) + ' · 完整地址=' + url);
+
     // 花钱前给个明白账：长视频分段多，误点一次挺贵的（真金白银踩过）
     const durSec = Math.round(lastProbe?.videos?.find((v) => v.duration)?.duration || 0);
     const estReqs = durSec ? Math.ceil(durSec / 20) : 0;
@@ -766,9 +767,6 @@ async function ingestFromPage() {
       );
     }
     confirmBigRun = false;
-
-    const url = lastMediaUrl;
-    if (!url) return note('这个页面没挑出可用的音轨地址：先点播放几秒让播放器真的去取流，再点「探测本页媒体」；\n如果一直挑不出，说明 CDN 拒绝了探测（多半是权限/防盗链），告诉我探测结果里「选用：」那行。', 'err');
 
     /* --- 2. 下载权限：DNR 的 modifyHeaders 需要目标域名权限，
      * 否则规则被静默忽略 → CDN 收不到 Referer → 403（B 站踩过）。 --- */
