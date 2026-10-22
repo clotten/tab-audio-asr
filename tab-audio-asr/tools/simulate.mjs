@@ -1,4 +1,4 @@
-﻿/**
+/**
  * simulate.mjs —— 不开浏览器，把 popup → SW → offscreen 的消息流真跑一遍
  *
  * 为什么要这个：MV3 里很多 bug 只在"跨上下文"时才暴露，

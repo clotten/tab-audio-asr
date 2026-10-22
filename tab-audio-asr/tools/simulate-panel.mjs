@@ -1,4 +1,4 @@
-﻿/**
+/**
  * simulate-panel.mjs —— 用最小 DOM 桩把 content/subtitle.js 真跑一遍
  *
  * 面板跑在网页里，普通单测覆盖不到。这里手写一个够用的假 DOM
