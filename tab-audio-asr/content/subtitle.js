@@ -1159,6 +1159,11 @@
   function listenShowForce() {
     try {
       chrome.runtime.onMessage.addListener((msg) => {
+        // 弹窗把诊断日志发到页面控制台（页面控制台关弹窗后还在，排查方便）
+        if (msg?.type === 'PAGE_LOG') {
+          console.log('[字幕助手·页面]', msg.text);
+          return;
+        }
         if (msg?.type !== 'SHOW_PANEL') return;
         forced = true;
         render();

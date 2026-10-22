@@ -669,6 +669,32 @@ async function saveSettings(next) {
   await chrome.storage.local.set({ asrSettings: settings });
 }
 
+/** 从媒体地址里取出"像 ID 的那一段"，方便人眼对比两条日志 */
+function mediaId(url) {
+  try {
+    const base = String(url).split('?')[0];
+    // B 站：https://…/42955378424/42955378424-1-30280.m4s
+    const m = base.match(/\/(\d{5,})[\/-]/);
+    if (m) return m[1];
+    return base.split('/') .pop();
+  } catch {
+    return '?';
+  }
+}
+
+/**
+ * 打日志：既进弹窗自己的控制台，也发到页面控制台。
+ * 弹窗一关控制台就没了，而页面的控制台能一直留着看，排查时更实用。
+ */
+function mlog(...args) {
+  console.log('[字幕助手]', ...args);
+  try {
+    chrome.tabs.sendMessage(activeTab?.id ?? 0, { type: 'PAGE_LOG', text: args.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ') }).catch(() => {});
+  } catch {
+    /* 页面没注入时忽略 */
+  }
+}
+
 async function ensureHostPermission(baseUrl) {
   try {
     const origin = new URL(baseUrl).origin + '/*';
@@ -721,6 +747,7 @@ async function ingestFromPage() {
       }
     }
 
+    mlog('整段提取 · 即将下载ID=' + mediaId(url) + ' · 完整地址=' + url);
     const url = lastMediaUrl;
     if (!url) return note('这个页面没挑出可用的音轨地址：先点播放几秒让播放器真的去取流，再点「探测本页媒体」；\n如果一直挑不出，说明 CDN 拒绝了探测（多半是权限/防盗链），告诉我探测结果里「选用：」那行。', 'err');
 
@@ -1023,10 +1050,18 @@ async function probeMedia() {
   ].join(' · ');
 
   // 读到平台播放信息就明说——这是 MSE 页面唯一的整段提取出路
-  // 选中的地址（resolveMediaUrl 记在 report.picked 上）：一眼看出挑的是音频还是视频
   const picked = r.picked;
+  // 选中的地址（resolveMediaUrl 记在 report.picked 上）：一眼看出挑的是音频还是视频
+  mlog(
+    '探测完成 · 平台=' + (r.platform || '?'),
+    '· 模式=' + (r.mode || '?'),
+    '· 分片=' + ((r.media?.segment || []).length),
+    '· 选用ID=' + (picked?.url ? mediaId(picked.url) : '无'),
+    '· 类型=' + (picked?.type || '?'),
+    '· 大小=' + (picked?.size ? Math.round(picked.size / 1048576) + 'MB' : '?')
+  );
   const pickedLine = picked
-    ? `\n选用：${picked.type || "未知类型"} / ${picked.size ? Math.round(picked.size / 1048576) + "MB" : "大小未知"} / 评分 ${picked.score}\n${picked.url.slice(0, 120)}`
+    ? "\n选用：ID " + mediaId(picked.url) + " · " + (picked.type || "未知类型") + " / " + (picked.size ? Math.round(picked.size / 1048576) + "MB" : "大小未知") + " / 评分 " + picked.score + "\n" + picked.url.slice(0, 120)
     : "";
   const platformAudio = r.playinfo?.audio || r.playinfo?.video || "";
   const platformLine = platformAudio
@@ -1235,7 +1270,6 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
-
 
 
 
