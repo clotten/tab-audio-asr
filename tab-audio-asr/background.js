@@ -1,4 +1,4 @@
-﻿/**
+/**
  * background.js —— MV3 Service Worker
  *
  * 职责很窄，只做三件事：
