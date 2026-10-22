@@ -374,6 +374,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
 
+        case 'INSTALL_MEDIA_HOOK': {
+          // 在主世界挂钩播放器请求：换视频（单页应用）时 __playinfo__ 不更新，
+          // 只有它发的那次 playurl 请求里有新音轨。
+          let tabId = msg.tabId;
+          if (!tabId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab?.id;
+          }
+          if (!tabId) {
+            sendResponse({ ok: false, error: '没有活动标签页' });
+            break;
+          }
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              world: 'MAIN',
+              files: ['content/media-hook.js']
+            });
+            sendResponse({ ok: true });
+          } catch (err) {
+            sendResponse({ ok: false, error: String(err?.message || err) });
+          }
+          break;
+        }
+
         case 'PROBE_MEDIA': {
           // 探测当前页能不能整段提取（直链 / HLS / DASH / 现成字幕 / 平台播放信息），
           // 用来判断"能不能播之前就拿到全稿"。
@@ -404,27 +429,44 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                 world: 'MAIN',
                 func: () => {
                   const pick = (obj) => (obj && (obj.baseUrl || obj.base_url || (Array.isArray(obj.backupUrl) ? obj.backupUrl[0] : ''))) || '';
-                  const out = { audio: '', video: '', duration: null, source: '' };
+                  const out = { audio: '', video: '', duration: null, source: '', href: '', stale: false };
+                  const el = document.querySelector('video');
+                  const dur = el && Number.isFinite(el.duration) ? Math.round(el.duration) : null;
 
-                  // B 站：window.__playinfo__ = { data: { dash: { audio: [...], video: [...] }, durl: [...] } }
-                  const pi = window.__playinfo__;
-                  const data = pi && pi.data;
-                  if (data) {
-                    out.source = '__playinfo__';
-                    const audio = data.dash && Array.isArray(data.dash.audio) ? data.dash.audio.slice() : [];
-                    audio.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0)); // 取最高码率的音轨
-                    out.audio = pick(audio[0]);
-                    const video = data.dash && Array.isArray(data.dash.video) ? data.dash.video.slice() : [];
-                    video.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
-                    out.video = pick(video[0]);
-                    if (!out.audio && Array.isArray(data.durl) && data.durl[0]) {
-                      // 老式单文件 MP4
-                      out.audio = data.durl[0].url || '';
-                      out.video = out.audio;
-                    }
-                    const el = document.querySelector('video');
-                    out.duration = el && Number.isFinite(el.duration) ? Math.round(el.duration) : null;
+                  // ① 优先用 media-hook 记下的地址：它是"播放器最近一次拿到的音轨"，
+                  //    单页应用换视频时只有它会更新（__playinfo__ 是首屏快照，不更新）。
+                  const hooked = window.__dshAsrMedia;
+                  if (hooked && hooked.audio) {
+                    out.audio = hooked.audio;
+                    out.video = hooked.video || '';
+                    out.source = `hook:${hooked.source || '?'}`;
+                    out.href = hooked.href || '';
+                    out.duration = hooked.duration || dur;
+                    // 记下的页面地址和现在不一样 → 说明是换集前抓的，已经不可信
+                    out.stale = !!hooked.href && hooked.href !== location.href;
                   }
+
+                  // ② 没有钩子记录才退回 __playinfo__（首屏那份）
+                  if (!out.audio) {
+                    const pi = window.__playinfo__;
+                    const data = pi && pi.data;
+                    if (data) {
+                      out.source = '__playinfo__';
+                      const audio = data.dash && Array.isArray(data.dash.audio) ? data.dash.audio.slice() : [];
+                      audio.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0)); // 最高码率
+                      out.audio = pick(audio[0]);
+                      const video = data.dash && Array.isArray(data.dash.video) ? data.dash.video.slice() : [];
+                      video.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+                      out.video = pick(video[0]);
+                      if (!out.audio && Array.isArray(data.durl) && data.durl[0]) {
+                        out.audio = data.durl[0].url || '';
+                        out.video = out.audio;
+                      }
+                    }
+                  }
+
+                  out.duration = out.duration || dur;
+                  out.href = location.href;
                   return out;
                 }
               });

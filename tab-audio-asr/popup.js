@@ -55,6 +55,10 @@ async function init() {
   await refreshHistory();
   await refreshLibrary();
 
+  // 打开弹窗就在主世界装"媒体请求钩子"：单页应用换视频时 __playinfo__ 不更新，
+  // 只有播放器新发的那次 playurl 里有真音轨，必须提前挂上钩子才抓得到。
+  chrome.runtime.sendMessage({ type: 'INSTALL_MEDIA_HOOK' }).catch(() => {});
+
   if (!settings.apiKey) showTab('cfg');
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -765,7 +769,9 @@ function pickMediaUrl(report) {
   const first = (arr) => (arr && arr.length ? arr[0].url || arr[0].src || '' : '');
 
   // 平台播放信息（B 站 __playinfo__ 之类）：直接就是音轨/整段地址，优先级最高
-  const platform = report.playinfo && (report.playinfo.audio || report.playinfo.video);
+  // 钩子记下的地址若是换集前抓的（stale），宁可不用，让上层重新探测
+  const pi = report.playinfo;
+  const platform = pi && !pi.stale ? pi.audio || pi.video || '' : '';
   if (platform && /^https?:/i.test(platform)) return platform;
   const tracks = (report.tracks || []).map((t) => t.src).filter(Boolean);
 
