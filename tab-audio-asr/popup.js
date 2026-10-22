@@ -1003,6 +1003,20 @@ function scoreCandidates(rows) {
 async function resolveMediaUrl(report) {
   if (!report) return '';
 
+  // ① B 站：现查播放接口，拿"当前这个视频"的音轨。
+  //    （__playinfo__ / __INITIAL_STATE__ 都是首屏快照，SPA 换集后不更新，会转到旧视频）
+  try {
+    const bili = await chrome.tabs.sendMessage(activeTab?.id ?? 0, { type: 'BILI_AUDIO' });
+    if (bili?.ok && bili.audio) {
+      report.picked = { url: bili.audio, type: 'bilibili-api', size: 0, score: 999 };
+      report.biliCid = bili.cid;
+      return bili.audio;
+    }
+    if (bili && bili.ok === false) report.biliError = bili.error || "未知";
+  } catch {
+    /* 不是 B 站或内容脚本没注入，继续走通用路径 */
+  }
+
   // ① 钩子抓到的是"当前视频那一次 playurl"里的音轨，最可信
   const hooked = report.playinfo;
   if (hooked && hooked.audio && !hooked.stale && String(hooked.source || '').startsWith('hook')) {
@@ -1115,6 +1129,7 @@ async function probeMedia() {
     '· 类型=' + (picked?.type || '?'),
     '· 大小=' + (picked?.size ? Math.round(picked.size / 1048576) + 'MB' : '?')
   );
+  const cidLine = r.biliCid ? (" · cid " + r.biliCid) : (r.biliError ? (" · B站接口：" + r.biliError) : "");
   const pickedLine = picked
     ? "\n选用：ID " + mediaId(picked.url) + " · " + (picked.type || "未知类型") + " / " + (picked.size ? Math.round(picked.size / 1048576) + "MB" : "大小未知") + " / 评分 " + picked.score + "\n" + picked.url.slice(0, 120)
     : "";
@@ -1136,7 +1151,7 @@ async function probeMedia() {
   const ok = ['subtitle', 'hls', 'dash', 'direct'].includes(r.mode) || !!platformAudio;
   const detail = (r.reasons || []).join('\n');
   note(
-    `${r.platform}｜${label}${platformLine}\n计数：${counts}\n${detail}${pickedLine}` +
+    `${r.platform}｜${label}${platformLine}${cidLine}\n计数：${counts}\n${detail}${pickedLine}` +
       (sample.length ? `\n链接：\n${sample.join('\n')}` : ''),
     ok ? 'ok' : 'err'
   );

@@ -1162,6 +1162,34 @@
         // 弹窗把诊断日志发到页面控制台（页面控制台关弹窗后还在，排查方便）
         // 在页面上下文里检查候选媒体地址：这里发出请求天然带页面 Referer，
         // 而且 CDN 给页面开了 CORS（实测 HEAD 200），不像扩展请求那样受权限限制。
+        // B 站：**现查**当前视频的音轨地址。
+        // 页面上的 __playinfo__ / __INITIAL_STATE__ 都是首屏快照，SPA 换集后不更新，
+        // 只有按 URL 里的 BV 号去问播放接口才拿得到当前视频的（实测 cid 对得上）。
+        if (msg?.type === 'BILI_AUDIO') {
+          (async () => {
+            try {
+              const bvid = (location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/) || [])[1] || "";
+              const p = Number(new URL(location.href).searchParams.get("p") || 1);
+              if (!bvid) return sendResponse({ ok: false, error: "URL 里没有 BV 号" });
+
+              const vr = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { credentials: "include" });
+              const vj = await vr.json().catch(() => null);
+              const pages = (vj && vj.data && vj.data.pages) || [];
+              const cid = (pages[p - 1] || pages[0] || {}).cid || (vj && vj.data && vj.data.cid) || "";
+              if (!cid) return sendResponse({ ok: false, error: "拿不到 cid（接口 code " + (vj && vj.code) + "）" });
+
+              const pr = await fetch(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80&fnver=0&fnval=4048&fourk=1`, { credentials: "include" });
+              const pj = await pr.json().catch(() => null);
+              const audio = ((pj && pj.data && pj.data.dash && pj.data.dash.audio) || []).slice().sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+              const url = (audio[0] && (audio[0].baseUrl || audio[0].base_url)) || (pj && pj.data && pj.data.durl && pj.data.durl[0] && pj.data.durl[0].url) || "";
+              sendResponse({ ok: !!url, audio: url, cid, bvid, p, bandwidth: audio[0]?.bandwidth || 0, title: (vj && vj.data && vj.data.title) || "", code: pj && pj.code });
+            } catch (err) {
+              sendResponse({ ok: false, error: String(err?.message || err) });
+            }
+          })();
+          return true;
+        }
+
         if (msg?.type === 'CHECK_MEDIA') {
           (async () => {
             const rows = [];
