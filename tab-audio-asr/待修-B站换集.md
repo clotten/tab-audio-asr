@@ -1,64 +1,66 @@
-# 待修：B 站换集后仍提取到旧视频（2026-10-21 夜）
+# B 站换集提取旧视频：已解决（2026-10-21 夜）
 
-## 现状
+状态：**已修复并实测通过**。完整过程与教训见 `复盘-2026-10-21-夜-B站.md`。
 
-- 「整段提取」在 B 站**第一条视频**上能跑通（真实测过：26 分钟 → 184 句 / 6158 字）。
-- 换到**另一个**视频（单页应用切换，不刷新页面）后，提取的仍是**上一个视频**的音频。
-- 刷新页面后再提取就是对的 → 说明问题在"页面内缓存/快照"，不在下载或识别。
+## 症状
 
-## 已做的两轮修复（都没根治）
+- 在 B 站第一个视频上「整段提取」正常（真实测过：26 分钟 → 184 句 / 6158 字）
+- 换到另一个视频（单页应用切换，不刷新页面）后：要么 403，要么**转出来的还是上一个视频的音频**
+- 刷新页面后就正常 → 说明问题在"页面内缓存/快照"，不在下载或识别
 
-1. **`lastProbe` 过期判断**：`ingestFromPage()` 比对 `lastProbe.url` 和当前 tab URL，不一致就重探。
-   → 无效。说明重探本身拿到的还是旧地址。
-2. **主世界读 `window.__playinfo__`**：取 `data.dash.audio[0].baseUrl`（最高码率）。
-   → 首次有效，换集后无效。**`__playinfo__` 是首屏服务端渲染的快照，SPA 换集不会更新它。**
+## 根因（实测）
 
-## 第三轮（已提交 e4a76f3，待验证）
+页面上能读到的两个全局变量**都是首屏快照，SPA 换集后永不更新**：
 
-`content/media-hook.js`：在主世界包 `fetch` / `XMLHttpRequest`，凡是 URL 命中
-`playurl|playinfo|player/wbi|mediainfo` 的响应，解析出 `dash.audio[].baseUrl`，记到
-`window.__dshAsrMedia`（带 `href` 和 `source`）。探测器优先读它，`href` 不匹配就当过期。
+| 来源 | 实测指向 | 是否可用 |
+|---|---|---|
+`window.__playinfo__` | 42906225680 | ❌ 永不更新 |
+`window.__INITIAL_STATE__` | 42868804351（另一个视频） | ❌ 永不更新 |
+`location.href` | BV1fxni6XEwD（真实） | ✅ 只有它是对的 |
 
-打开弹窗时注入（`INSTALL_MEDIA_HOOK`，activeTab 授权）。
+`performance` 里旧视频的分片甚至比当前视频的更"新"（startTime 68956 vs 14652），
+所以"取最近""取体积最小"都只是碰巧，不可靠。
 
-## 零成本诊断（不花 API 钱，先做这个）
+另外：`executeScript({world:'MAIN', files:[...]})` 在这台 Edge 上**静默不生效**，
+换成 `world:'MAIN', func` 才行——这是平台陷阱，已改。
 
-在 B 站视频页按 F12 → Console，粘贴：
+## 解法（当前代码顺序）
 
-```js
-// ① 钩子装上没有？
-window.__dshAsrHookInstalled
+`popup.js → resolveMediaUrl()`：
 
-// ② 抓到过东西吗？（换集后立刻看）
-window.__dshAsrMedia
+1. **B 站播放接口现查**（首选，实测 cid 与当前视频对齐）
+   `location.pathname` 取 BV 号 → `x/web-interface/view` 取 cid → `x/player/playurl` 取 `dash.audio[最高码率].baseUrl`
+   - 实现在 `content/subtitle.js` 的 `BILI_AUDIO` 消息里（页面上下文发请求，自带 Referer 与 CORS 许可）
+2. **主世界钩子**（`lib/page-hook.js`，`world:'MAIN' + func` 注入）
+   - 只能在使用者**真的开始拉流**时抓到新 playurl；记录带 `href`，跨页即判过期
+3. **页面上下文检查分片**（`CHECK_MEDIA`）：HEAD → 失败退回 `Range: bytes=0-1023`
+4. **平台快照**：仅在没有任何分片、且 `timelength` 与当前 `<video>.duration` 相差 ≤2 秒时使用
 
-// ③ 首屏快照是不是还指着老视频？
-window.__playinfo__?.data?.dash?.audio?.[0]?.baseUrl?.slice(0, 120)
+**硬规则**：有分片地址却挑不出音轨 → 直接失败并提示，**绝不回退到快照**
+（静默转错视频比失败糟糕得多）。
 
-// ④ 当前页面地址（和 ② 里的 href 比）
-location.href
+## 实测证据（用户提供的控制台日志）
+
+```
+v2026-10-21c
+探测完成 · 平台=bilibili · 模式=mse · 分片=2 · 选用ID=42780986019 · 类型=bilibili-api
+整段提取 · 即将下载ID=42780986019
 ```
 
-判断：
+探测与提取 ID 一致；换视频后 ID 跟着变；`sendResponse` 报错消失。
 
-| 结果 | 结论 | 下一步 |
-|---|---|---|
-① 是 `undefined` | 钩子没注入 | 检查 `executeScript({world:'MAIN', files})` 是否被页面 CSP 拦；改用 `func` 注入 |
-② 有值但 `href` 是旧页面 | 钩子在工作，但换集后没有新请求被捕获 | 换集时的请求可能不是 XHR/fetch，而是 `sendBeacon` 或 worker 内 fetch → 需要 hook Worker |
-② 一直没有值 | URL 过滤没命中 | 打印所有 XHR/fetch 的 URL（临时把过滤条件改成全捕获），看真实请求长什么样 |
-③ 和 ④ 一致 | 说明这个视频的 `__playinfo__` 是新的，问题在别处 | 回头查 `pickMediaUrl` 的优先级 |
+## 已加的防复发措施
 
-## 兜底方案（如果钩子路线走不通）
+- `tools/check-sendresponse.mjs`：用 `sendResponse` 必须在 `onMessage` 签名里声明
+- `tools/strip-bom.mjs`：清 BOM（manifest 带 BOM 会直接装不上）
+- 内容脚本版本戳：控制台 `v2026-10-21c` + DOM `document.documentElement.dataset.dshAsrVersion`
+- 长视频（>10 分钟）提取前做花费二次确认
 
-B 站的分片请求已经从 `performance.getEntriesByType('resource')` 抓得到（探测里"分片 2"）。
-思路：直接用**音频分片 URL**（`-30280.m4s` 这类）当整段地址——它一定是当前视频的。
-不确定点是"哪个分片是音频"：可以用 `Content-Type` 判断（HEAD 请求，扩展有权限），
-`audio/*` 或 `video/mp4` + 体积明显小的那个。
+## 仍待处理
 
-## 顺便要做的（成本护栏）
-
-用户在峰值时段花了 ¥4 却没拿到结果。建议加：
-
-1. 提取前显示**预计请求数**（时长 ÷ 20 秒）和"当前是峰值时段"提醒；
-2. 超过 10 分钟的视频要求**二次确认**；
-3. 失败重试上限从 3 次降到 2 次（403 这种不该重试）。
+1. **音轨码率不稳**：同一视频不同次调用，`playurl` 可能返回 `30280`(~200kbps) 或 `30216`(~67kbps)，
+   低码率会影响识别率。应在 `dash.audio` 里**显式优先 30280**，而不只按 bandwidth 排序。
+2. `m4s`（分片 MP4）能否被 `decodeAudioData` 吃下，尚未在所有视频上验证；失败报错已明确。
+3. 多 P 视频（`?p=N`）已按 `pages[N-1].cid` 处理，但**未实测**。
+4. 唯一无法覆盖的情况：B 站若改为强制 `wbi` 签名，`/x/player/playurl` 会返回 `-403`；
+   届时需回退到钩子（要求用户先播放几秒）。
