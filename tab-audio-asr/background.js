@@ -288,6 +288,72 @@ async function resetSession() {
 /* 消息路由                                                            */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------ CDN 请求头 ------------------------------ */
+
+/**
+ * 有些站点的 CDN 会校验 Referer（B 站的 bilivideo 就是），
+ * 而 fetch 里不能手写 Referer（浏览器禁止），只能靠 declarativeNetRequest
+ * 在请求真正发出去之前塞进去。
+ *
+ * 规则是**会话级**的（updateSessionRules，浏览器关掉就没了），
+ * 只在整段提取期间装、结束后卸，不长期改用户的请求。
+ */
+const CDN_RULES = [
+  // B 站：音频/视频都在 bilivideo.com，Referer 必须是 bilibili.com
+  { id: 9001, filter: '||bilivideo.com', referer: 'https://www.bilibili.com/', origin: 'https://www.bilibili.com' },
+  { id: 9002, filter: '||hdslb.com', referer: 'https://www.bilibili.com/', origin: 'https://www.bilibili.com' }
+];
+
+/** 给这个 URL 装对应的请求头规则（返回是否装了） */
+async function applyCdnHeaders(url) {
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+
+  const hit = CDN_RULES.find((r) => host.endsWith(r.filter.replace('||', '')));
+  if (!hit) return false;
+
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [hit.id],
+      addRules: [
+        {
+          id: hit.id,
+          priority: 1,
+          action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+              { header: 'referer', operation: 'set', value: hit.referer },
+              { header: 'origin', operation: 'set', value: hit.origin }
+            ]
+          },
+          condition: {
+            urlFilter: hit.filter,
+            resourceTypes: ['xmlhttprequest', 'media', 'other']
+          }
+        }
+      ]
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 卸掉所有 CDN 规则 */
+async function clearCdnHeaders() {
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: CDN_RULES.map((r) => r.id)
+    });
+  } catch {
+    /* 没权限/没规则都无所谓 */
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // 发给 offscreen 的消息不要在这里处理，否则两个上下文会抢着回包
   if (!msg || typeof msg !== 'object' || msg.target === 'offscreen') return false;
@@ -535,6 +601,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
         case 'INGEST_URL': {
           // videoKey 必须一起转：offscreen 靠它决定「这份稿子属于哪个视频」并入库
+          // CDN 可能校验 Referer（B 站的 bilivideo 就是），fetch 里写不了，只能靠 DNR 装规则
+          const cdnApplied = await applyCdnHeaders(msg.url);
           const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url, videoKey: msg.videoKey }).catch((err) => ({
             ok: false,
             error: `后台页面未响应：${String(err?.message || err)}`
@@ -543,9 +611,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // 整段提取不走录制，所以字幕层要在这里补注入，否则页面上一片空白
           if (res?.ok && msg.tabId) {
             const ok = await injectSubtitle(msg.tabId);
-            sendResponse({ ...res, subtitle: ok });
+            sendResponse({ ...res, cdnHeaders: cdnApplied, subtitle: ok });
           } else {
-            sendResponse(res || { ok: false, error: '没有响应' });
+            sendResponse({ ...(res || { ok: false, error: '没有响应' }), cdnHeaders: cdnApplied });
           }
           break;
         }
@@ -608,6 +676,7 @@ chrome.runtime.onStartup.addListener(async () => {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
 
 
 

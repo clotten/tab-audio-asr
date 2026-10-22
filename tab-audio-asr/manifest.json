@@ -1,44 +1,45 @@
-{
-  "manifest_version": 3,
-  "name": "网页视频转文字（硅基流动 ASR）",
-  "version": "1.0.0",
-  "description": "捕获当前标签页正在播放的声音（在线视频 / 直播 / 任意网页播放器），实时分段转成 WAV 并调用硅基流动语音转文字接口，边播边出文字稿。",
-  "minimum_chrome_version": "116",
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  },
-  "permissions": [
-    "tabCapture",
-    "offscreen",
-    "storage",
-    "scripting",
-    "activeTab"
-  ],
-  "host_permissions": [
-    "https://api.siliconflow.cn/*"
-  ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://*/*"
-  ],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
-  "action": {
-    "default_title": "网页音频转文字",
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+﻿{
+    "manifest_version":  3,
+    "name":  "网页视频转文字（硅基流动 ASR）",
+    "version":  "1.0.0",
+    "description":  "捕获当前标签页正在播放的声音（在线视频 / 直播 / 任意网页播放器），实时分段转成 WAV 并调用硅基流动语音转文字接口，边播边出文字稿。",
+    "minimum_chrome_version":  "116",
+    "content_security_policy":  {
+                                    "extension_pages":  "script-src \u0027self\u0027 \u0027wasm-unsafe-eval\u0027; object-src \u0027self\u0027"
+                                },
+    "permissions":  [
+                        "tabCapture",
+                        "offscreen",
+                        "storage",
+                        "scripting",
+                        "activeTab",
+                        "declarativeNetRequest"
+                    ],
+    "host_permissions":  [
+                             "https://api.siliconflow.cn/*"
+                         ],
+    "optional_host_permissions":  [
+                                      "https://*/*",
+                                      "http://*/*"
+                                  ],
+    "background":  {
+                       "service_worker":  "background.js",
+                       "type":  "module"
+                   },
+    "action":  {
+                   "default_title":  "网页音频转文字",
+                   "default_popup":  "popup.html",
+                   "default_icon":  {
+                                        "16":  "icons/icon16.png",
+                                        "32":  "icons/icon32.png",
+                                        "48":  "icons/icon48.png",
+                                        "128":  "icons/icon128.png"
+                                    }
+               },
+    "icons":  {
+                  "16":  "icons/icon16.png",
+                  "32":  "icons/icon32.png",
+                  "48":  "icons/icon48.png",
+                  "128":  "icons/icon128.png"
+              }
 }
