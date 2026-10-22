@@ -722,7 +722,7 @@ async function ingestFromPage() {
     }
 
     const url = lastMediaUrl;
-    if (!url) return note('没拿到媒体地址，先点「探测本页媒体」。', 'err');
+    if (!url) return note('这个页面没挑出可用的音轨地址：先点播放几秒让播放器真的去取流，再点「探测本页媒体」；\n如果一直挑不出，说明 CDN 拒绝了探测（多半是权限/防盗链），告诉我探测结果里「选用：」那行。', 'err');
 
     /* --- 2. 下载权限：DNR 的 modifyHeaders 需要目标域名权限，
      * 否则规则被静默忽略 → CDN 收不到 Referer → 403（B 站踩过）。 --- */
@@ -974,7 +974,12 @@ async function resolveMediaUrl(report) {
     }
   }
 
-  // 兜底：平台快照（只在它没被判定过期时）
+  // 有分片地址却挑不出音轨 → 说明 HEAD 被 CDN 拒了（多半是权限/防盗链）。
+  // 这时**绝不能**回退到 __playinfo__：它是首屏快照，换集后还指着第一个视频，
+  // 用它就会"每次都转同一个视频的音频"（真实踩过，比失败更糟）。
+  if (segments.length) return '';
+
+  // 完全没有分片时才用平台快照，且必须自证没过期（时长对得上当前 <video>）
   const pi = report.playinfo;
   if (pi && !pi.stale && (pi.audio || pi.video)) return pi.audio || pi.video;
 
@@ -1230,6 +1235,7 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+
 
 
 

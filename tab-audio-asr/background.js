@@ -483,6 +483,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                         out.audio = data.durl[0].url || '';
                         out.video = out.audio;
                       }
+
+                      // 关键校验：__playinfo__ 是首屏快照，换集不会更新（实测几个视频拿到
+                      // 同一个 baseUrl）。拿它里面的时长和当前 <video> 的时长比，对不上就
+                      // 说明这份快照属于别的视频，必须作废——否则会拿旧视频的音轨去转写。
+                      const snapMs = Number(data.timelength || (data.dash && data.dash.duration) || 0);
+                      const snapSec = snapMs > 0 ? Math.round(snapMs / 1000) : 0;
+                      if (snapSec && dur && Math.abs(snapSec - dur) > 2) out.stale = true;
                     }
                   }
 
@@ -746,6 +753,7 @@ chrome.runtime.onStartup.addListener(async () => {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
 
 
 
