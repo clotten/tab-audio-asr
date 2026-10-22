@@ -1,4 +1,5 @@
 /**
+
  * content/subtitle.js —— 视频页浮窗文字稿（注入到被录制的网页里）
  *
  * 为什么是"面板"而不是单行字幕：
@@ -13,6 +14,12 @@
  *  4. 视频全屏时把节点搬进 fullscreenElement，否则全屏下会被藏掉；
  *  5. 可拖动、可拉大小，位置/尺寸/字号都记进设置。
  */
+
+// 版本戳：控制台一眼看出页面里跑的是哪一版内容脚本（排查"改了没生效"）
+try {
+  console.log('[字幕助手·页面] 内容脚本已加载 v2026-10-21c');
+} catch {}
+
 
 (() => {
   // 扩展刷新后，页面里可能还留着旧实例（它的代码已随旧扩展失效，但 DOM 还在）。
@@ -1159,6 +1166,13 @@
   function listenShowForce() {
     try {
       chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+        // 防御：正常情况下 sendResponse 一定有；但页面里可能残留旧版本的监听器，
+        // 那时它就是个未定义变量，一处报错会把整个响应吞掉（踩过）。
+        const reply = (payload) => {
+          try {
+            if (typeof sendResponse === 'function') sendResponse(payload);
+          } catch {}
+        };
         // 弹窗把诊断日志发到页面控制台（页面控制台关弹窗后还在，排查方便）
         // 在页面上下文里检查候选媒体地址：这里发出请求天然带页面 Referer，
         // 而且 CDN 给页面开了 CORS（实测 HEAD 200），不像扩展请求那样受权限限制。
@@ -1170,21 +1184,21 @@
             try {
               const bvid = (location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/) || [])[1] || "";
               const p = Number(new URL(location.href).searchParams.get("p") || 1);
-              if (!bvid) return sendResponse({ ok: false, error: "URL 里没有 BV 号" });
+              if (!bvid) return reply({ ok: false, error: "URL 里没有 BV 号" });
 
               const vr = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { credentials: "include" });
               const vj = await vr.json().catch(() => null);
               const pages = (vj && vj.data && vj.data.pages) || [];
               const cid = (pages[p - 1] || pages[0] || {}).cid || (vj && vj.data && vj.data.cid) || "";
-              if (!cid) return sendResponse({ ok: false, error: "拿不到 cid（接口 code " + (vj && vj.code) + "）" });
+              if (!cid) return reply({ ok: false, error: "拿不到 cid（接口 code " + (vj && vj.code) + "）" });
 
               const pr = await fetch(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80&fnver=0&fnval=4048&fourk=1`, { credentials: "include" });
               const pj = await pr.json().catch(() => null);
               const audio = ((pj && pj.data && pj.data.dash && pj.data.dash.audio) || []).slice().sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
               const url = (audio[0] && (audio[0].baseUrl || audio[0].base_url)) || (pj && pj.data && pj.data.durl && pj.data.durl[0] && pj.data.durl[0].url) || "";
-              sendResponse({ ok: !!url, audio: url, cid, bvid, p, bandwidth: audio[0]?.bandwidth || 0, title: (vj && vj.data && vj.data.title) || "", code: pj && pj.code });
+              reply({ ok: !!url, audio: url, cid, bvid, p, bandwidth: audio[0]?.bandwidth || 0, title: (vj && vj.data && vj.data.title) || "", code: pj && pj.code });
             } catch (err) {
-              sendResponse({ ok: false, error: String(err?.message || err) });
+              reply({ ok: false, error: String(err?.message || err) });
             }
           })();
           return true;
@@ -1222,7 +1236,7 @@
               }
               rows.push(row);
             }
-            sendResponse({ ok: true, rows });
+            reply({ ok: true, rows });
           })();
           return true; // 异步响应
         }
