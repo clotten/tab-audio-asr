@@ -978,6 +978,24 @@ async function refreshProbe() {
  * 首选是播放器**真去取过的分片**（performance 里抓到的，一定是当前视频的），
  * 再让后台用 HEAD 的 content-type / 体积挑出其中的音轨。
  */
+/**
+ * 给候选地址打分：明确是音频的最好；同为 video/mp4 时**体积小的当音频**
+ * （同一段视频的音轨比画面小一个数量级——B 站实测 970KB vs 4.7MB）。
+ */
+function scoreCandidates(rows) {
+  const score = (x) => {
+    if (!x || x.status < 200 || x.status >= 300) return -1;
+    if (x.type.startsWith('audio/')) return 100;
+    if (/\.(mp3|m4a|aac|ogg|opus|wav)(\?|$)/i.test(x.url || '')) return 90;
+    if (x.type.startsWith('video/')) return 50;
+    if (/\.(m4s|ts)(\?|$)/i.test(x.url || '')) return 40;
+    return 10;
+  };
+  return (rows || [])
+    .map((x) => ({ ...x, score: score(x) }))
+    .sort((a, b) => b.score - a.score || (a.size || Infinity) - (b.size || Infinity));
+}
+
 async function resolveMediaUrl(report) {
   if (!report) return '';
 
@@ -998,11 +1016,32 @@ async function resolveMediaUrl(report) {
   if (unique.length) await ensureHostPermission(unique[0]).catch(() => false);
 
   if (unique.length) {
-    const picked = await chrome.runtime.sendMessage({ type: 'PICK_MEDIA', urls: unique }).catch(() => null);
-    if (picked?.ok && picked.best?.url) {
-      // 记下来，探测结果里能直接看到选了哪个、凭什么选的
-      report.picked = { url: picked.best.url, type: picked.best.type, size: picked.best.size, score: picked.best.score };
-      return picked.best.url;
+    // 首选：让**页面上下文**（内容脚本）去检查。它发出的请求带页面 Referer，
+    // 而且 CDN 对页面开了 CORS（实测 HEAD 200）；B 站的音频和视频常在**不同** CDN
+    // 主机上（-01 / -03），逐台申请扩展权限根本不现实。
+    let rows = null;
+    try {
+      const inPage = await chrome.tabs.sendMessage(activeTab?.id ?? 0, { type: 'CHECK_MEDIA', urls: unique });
+      if (inPage?.ok) rows = inPage.rows;
+    } catch {
+      rows = null;
+    }
+
+    if (rows) {
+      const scored = scoreCandidates(rows);
+      const best = scored.find((x) => x.score >= 0);
+      if (best) {
+        report.picked = { url: best.url, type: best.type, size: best.size, score: best.score };
+        return best.url;
+      }
+      report.pickErrors = scored.slice(0, 4).map((x) => `${x.status || 'x'} ${x.error || ''}`.trim());
+    } else {
+      // 页面没注入内容脚本时退回后台（后台需要 host 权限 + DNR 补 Referer）
+      const picked = await chrome.runtime.sendMessage({ type: 'PICK_MEDIA', urls: unique }).catch(() => null);
+      if (picked?.ok && picked.best?.url) {
+        report.picked = { url: picked.best.url, type: picked.best.type, size: picked.best.size, score: picked.best.score };
+        return picked.best.url;
+      }
     }
   }
 

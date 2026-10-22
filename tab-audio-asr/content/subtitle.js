@@ -1160,6 +1160,45 @@
     try {
       chrome.runtime.onMessage.addListener((msg) => {
         // 弹窗把诊断日志发到页面控制台（页面控制台关弹窗后还在，排查方便）
+        // 在页面上下文里检查候选媒体地址：这里发出请求天然带页面 Referer，
+        // 而且 CDN 给页面开了 CORS（实测 HEAD 200），不像扩展请求那样受权限限制。
+        if (msg?.type === 'CHECK_MEDIA') {
+          (async () => {
+            const rows = [];
+            const list = Array.isArray(msg.urls) ? msg.urls.slice(0, 8) : [];
+            for (const u of list) {
+              const row = { url: u, status: 0, type: "", size: 0, error: "" };
+              try {
+                const h = await fetch(u, { method: "HEAD" });
+                row.status = h.status;
+                row.type = (h.headers.get("content-type") || "").toLowerCase();
+                row.size = Number(h.headers.get("content-length") || 0);
+              } catch (err) {
+                row.error = String(err?.message || err);
+              }
+              // 有的 CDN 不认 HEAD，退回只取前 1KB
+              if (!row.type || !row.size) {
+                try {
+                  const g = await fetch(u, { headers: { Range: "bytes=0-1023" } });
+                  const t = (g.headers.get("content-type") || "").toLowerCase();
+                  if (t) row.type = t;
+                  const cr = g.headers.get("content-range") || "";
+                  const total = Number((cr.match(/\/(\d+)$/) || [])[1] || 0);
+                  if (total) row.size = total;
+                  if (!row.status) row.status = g.status;
+                  row.error = "";
+                  g.body?.cancel?.().catch?.(() => {});
+                } catch (err) {
+                  row.error = row.error || String(err?.message || err);
+                }
+              }
+              rows.push(row);
+            }
+            sendResponse({ ok: true, rows });
+          })();
+          return true; // 异步响应
+        }
+
         if (msg?.type === 'PAGE_LOG') {
           console.log('[字幕助手·页面]', msg.text);
           return;
