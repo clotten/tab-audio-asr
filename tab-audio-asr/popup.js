@@ -55,9 +55,6 @@ async function init() {
   await refreshHistory();
   await refreshLibrary();
 
-  // 打开弹窗就在主世界装"媒体请求钩子"：单页应用换视频时 __playinfo__ 不更新，
-  // 只有播放器新发的那次 playurl 里有真音轨，必须提前挂上钩子才抓得到。
-  chrome.runtime.sendMessage({ type: 'INSTALL_MEDIA_HOOK' }).catch(() => {});
 
   if (!settings.apiKey) showTab('cfg');
 
@@ -941,8 +938,47 @@ async function refreshProbe() {
   // 平台播放信息（主世界读到的页面 JS 变量）并进报告，后续统一按 report 用
   if (res.playinfo) r.playinfo = res.playinfo;
   lastProbe = r;
-  lastMediaUrl = pickMediaUrl(r);
+  lastMediaUrl = await resolveMediaUrl(r);
   return { ok: true, error: '', report: r, url: lastMediaUrl };
+}
+
+/**
+ * 决定到底提取哪个地址。
+ *
+ * 顺序很重要：B 站的 `__playinfo__` 是**首屏服务端渲染的快照，换集永不更新**
+ * （实测几个不同视频拿到的是同一个 baseUrl），所以它只能做最后的兜底。
+ * 首选是播放器**真去取过的分片**（performance 里抓到的，一定是当前视频的），
+ * 再让后台用 HEAD 的 content-type / 体积挑出其中的音轨。
+ */
+async function resolveMediaUrl(report) {
+  if (!report) return '';
+
+  const segments = (report.media?.segment || []).map((s) => s.url || '').filter((u) => /^https?:/i.test(u));
+  const direct = (report.videos || [])
+    .map((v) => v.src || '')
+    .filter((u) => /^https?:/i.test(u) && !/^blob:/i.test(u));
+  const candidates = [
+    ...segments.slice().reverse(), // 最近的优先
+    ...direct,
+    ...(report.media?.video || []).map((x) => x.url).filter(Boolean),
+    ...(report.media?.audio || []).map((x) => x.url).filter(Boolean)
+  ];
+
+  const unique = [...new Set(candidates)].slice(0, 8);
+  if (unique.length) {
+    const picked = await chrome.runtime.sendMessage({ type: 'PICK_MEDIA', urls: unique }).catch(() => null);
+    if (picked?.ok && picked.best?.url) {
+      // 记下来，探测结果里能直接看到选了哪个、凭什么选的
+      report.picked = { url: picked.best.url, type: picked.best.type, size: picked.best.size, score: picked.best.score };
+      return picked.best.url;
+    }
+  }
+
+  // 兜底：平台快照（只在它没被判定过期时）
+  const pi = report.playinfo;
+  if (pi && !pi.stale && (pi.audio || pi.video)) return pi.audio || pi.video;
+
+  return '';
 }
 
 async function probeMedia() {
@@ -982,6 +1018,11 @@ async function probeMedia() {
   ].join(' · ');
 
   // 读到平台播放信息就明说——这是 MSE 页面唯一的整段提取出路
+  // 选中的地址（resolveMediaUrl 记在 report.picked 上）：一眼看出挑的是音频还是视频
+  const picked = r.picked;
+  const pickedLine = picked
+    ? `\n选用：${picked.type || "未知类型"} / ${picked.size ? Math.round(picked.size / 1048576) + "MB" : "大小未知"} / 评分 ${picked.score}\n${picked.url.slice(0, 120)}`
+    : "";
   const platformAudio = r.playinfo?.audio || r.playinfo?.video || "";
   const platformLine = platformAudio
     ? ` · 平台音轨 ${platformAudio.slice(0, 60)}…（可整段提取）`
@@ -1000,7 +1041,7 @@ async function probeMedia() {
   const ok = ['subtitle', 'hls', 'dash', 'direct'].includes(r.mode) || !!platformAudio;
   const detail = (r.reasons || []).join('\n');
   note(
-    `${r.platform}｜${label}${platformLine}\n计数：${counts}\n${detail}` +
+    `${r.platform}｜${label}${platformLine}\n计数：${counts}\n${detail}${pickedLine}` +
       (sample.length ? `\n链接：\n${sample.join('\n')}` : ''),
     ok ? 'ok' : 'err'
   );

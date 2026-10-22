@@ -374,31 +374,52 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
 
-        case 'INSTALL_MEDIA_HOOK': {
-          // 在主世界挂钩播放器请求：换视频（单页应用）时 __playinfo__ 不更新，
-          // 只有它发的那次 playurl 请求里有新音轨。
-          let tabId = msg.tabId;
-          if (!tabId) {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            tabId = tab?.id;
-          }
-          if (!tabId) {
-            sendResponse({ ok: false, error: '没有活动标签页' });
+
+        case 'PICK_MEDIA': {
+          // 从候选地址里挑出"真正的音轨"。
+          //
+          // 为什么需要这一步：B 站的 window.__playinfo__ 是首屏快照，换集后**永不更新**
+          // （实测同一个 baseUrl 在几个视频之间一模一样），所以不能按它提取。
+          // 而播放器每次换集都会真的去取分片，performance 里能看得到——那才是当前视频。
+          // 分片里有音频也有视频，用 HEAD 的 content-type/体积分辨。
+          const urls = Array.isArray(msg.urls) ? msg.urls.filter((u) => /^https?:/i.test(String(u))).slice(0, 8) : [];
+          if (!urls.length) {
+            sendResponse({ ok: false, error: '没有候选地址' });
             break;
           }
-          try {
-            await chrome.scripting.executeScript({
-              target: { tabId },
-              world: 'MAIN',
-              files: ['content/media-hook.js']
-            });
-            sendResponse({ ok: true });
-          } catch (err) {
-            sendResponse({ ok: false, error: String(err?.message || err) });
+
+          // CDN 可能校验 Referer（B 站），HEAD 也一样要被拦
+          await applyCdnHeaders(urls[0]).catch(() => false);
+
+          const probed = [];
+          for (const u of urls) {
+            try {
+              const r = await fetch(u, { method: 'HEAD' });
+              const type = (r.headers.get('content-type') || '').toLowerCase();
+              const size = Number(r.headers.get('content-length') || 0);
+              probed.push({ url: u, status: r.status, type, size, ok: r.ok });
+            } catch (err) {
+              probed.push({ url: u, error: String(err?.message || err), ok: false });
+            }
           }
+
+          // 打分：明确是音频的最好；其次是视频容器里最"小"的那个（音轨比视频小一个量级）
+          const score = (x) => {
+            if (!x.ok) return -1;
+            if (x.type.startsWith('audio/')) return 100;
+            if (x.type.startsWith('video/')) return 50;
+            if (/\.(mp3|m4a|aac|ogg|opus|wav)(\?|$)/i.test(x.url)) return 90;
+            if (/\.(m4s|ts)(\?|$)/i.test(x.url)) return 40;
+            return 10;
+          };
+          const ranked = probed
+            .map((x) => ({ ...x, score: score(x) }))
+            .sort((a, b) => b.score - a.score || (a.size || Infinity) - (b.size || Infinity));
+
+          const best = ranked.find((x) => x.score >= 0) || null;
+          sendResponse({ ok: !!best, best, all: ranked });
           break;
         }
-
         case 'PROBE_MEDIA': {
           // 探测当前页能不能整段提取（直链 / HLS / DASH / 现成字幕 / 平台播放信息），
           // 用来判断"能不能播之前就拿到全稿"。
