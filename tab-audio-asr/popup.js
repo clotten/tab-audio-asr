@@ -55,6 +55,10 @@ async function init() {
   await refreshHistory();
   await refreshLibrary();
 
+  // 打开弹窗就装"播放器请求钩子"：B 站换集会重新拉 playurl，
+  // 只有挂钩那次请求才拿得到当前视频的真音轨（__playinfo__ 永不更新）。
+  chrome.runtime.sendMessage({ type: 'INSTALL_MEDIA_HOOK' }).then((r) => mlog('钩子注入：' + (r?.ok ? r.state || 'ok' : '失败 ' + (r?.error || '')))).catch(() => {});
+
 
   if (!settings.apiKey) showTab('cfg');
 
@@ -998,6 +1002,13 @@ function scoreCandidates(rows) {
 
 async function resolveMediaUrl(report) {
   if (!report) return '';
+
+  // ① 钩子抓到的是"当前视频那一次 playurl"里的音轨，最可信
+  const hooked = report.playinfo;
+  if (hooked && hooked.audio && !hooked.stale && String(hooked.source || '').startsWith('hook')) {
+    report.picked = { url: hooked.audio, type: 'hook:' + hooked.source, size: 0, score: 999 };
+    return hooked.audio;
+  }
 
   const segments = (report.media?.segment || []).map((s) => s.url || '').filter((u) => /^https?:/i.test(u));
   const direct = (report.videos || [])

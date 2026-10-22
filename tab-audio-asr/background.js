@@ -11,6 +11,7 @@
  */
 
 import { buildDoc, getDoc, upsertDoc, listDocs, removeDoc, sanitizeDocs } from './lib/docstore.js';
+import { pageHook } from './lib/page-hook.js';
 
 // 频道里给上面几个起短名，避免和消息分支里的局部变量重名
 const docUpsert = upsertDoc;
@@ -375,6 +376,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
 
 
+        case 'INSTALL_MEDIA_HOOK': {
+          // 挂钩播放器的 playurl 请求，抓当前视频的音轨。
+          // 注意用 func 注入：world:'MAIN' + files 在这台 Edge 上静默不生效（实测过）。
+          let tabId = msg.tabId;
+          if (!tabId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab?.id;
+          }
+          if (!tabId) { sendResponse({ ok: false, error: '没有活动标签页' }); break; }
+          try {
+            const out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageHook });
+            sendResponse({ ok: true, state: out?.[0]?.result || '' });
+          } catch (err) {
+            sendResponse({ ok: false, error: String(err?.message || err) });
+          }
+          break;
+        }
+
         case 'PICK_MEDIA': {
           // 从候选地址里挑出"真正的音轨"。
           //
@@ -455,6 +474,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             break;
           }
           try {
+            // 先把内容脚本注入，否则下面「在页面里检查候选地址」没有消息监听可用
+            await injectSubtitle(tabId).catch(() => false);
+
             // ① 常规探测（隔离世界，能读 performance / DOM）
             const [res] = await chrome.scripting.executeScript({
               target: { tabId },
