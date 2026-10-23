@@ -435,7 +435,8 @@ console.log('\n10) 静态稿（整段提取）按视频时间轴高亮');
   const cur3 = body.children.filter((c) => c.className.includes('row') && c.classList.contains('cur'));
   check('继续播放仍会高亮' , cur3.length === 1, `cur=${cur3.length}`);
   const followBtn = getPanel().children.find((c) => c.className.includes('head'))?.children?.find((c) => c.className?.includes('latest'));
-  check('跟随按钮保持隐藏（没被误判为用户滚动）', !followBtn?.classList?.contains('show'), followBtn?.className);
+  // 设计改了：静态稿里跟随按钮常驻，方便随时把视线拉回当前句
+  check('静态稿里跟随按钮常驻显示', !!followBtn?.classList?.contains('show'), followBtn?.className);
 
   // 顶部显示视频进度而不是处理耗时
 

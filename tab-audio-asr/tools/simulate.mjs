@@ -31,6 +31,7 @@ import { createSileroVad, createSileroGate } from '../lib/silero.js';
 import { planInterim, stripCommittedOverlap } from '../lib/incremental.js';
 import { buildDoc, getDoc, upsertDoc, listDocs, removeDoc, sanitizeDocs } from '../lib/docstore.js';
 import { TRANSLATE_BATCH, chunkTexts, buildTranslateMessages, parseTranslateReply, applyTranslations, needsTranslation, translationStats } from '../lib/translate.js';
+import { looksTruncated, informationUnits, splitInHalf } from '../lib/coverage.js';
 import { normalizeVideoUrl } from '../lib/videokey.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -506,6 +507,9 @@ const offscreenCtx = vm.createContext({
   stripCommittedOverlap,
   buildDoc,
   normalizeVideoUrl,
+  looksTruncated,
+  informationUnits,
+  splitInHalf,
   TRANSLATE_BATCH,
   chunkTexts,
   buildTranslateMessages,

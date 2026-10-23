@@ -995,7 +995,13 @@ try {
 
     parts.whereCount.textContent = `${items.length} 句 / ${items.reduce((n, s) => n + s.text.length, 0)} 字`;
     const mode = resolveMode();
-    if (parts.latestBtn) parts.latestBtn.textContent = mode.followLabel;
+    if (parts.latestBtn) {
+      parts.latestBtn.textContent = mode.followLabel;
+      // 静态稿（整段提取/导入）里这个按钮常驻，随时能把视线拉回当前句；
+      // 录制模式仍然是“滚离底部才出现”。
+      const showFollow = mode.scrollTarget === 'current' ? true : !followLatest;
+      parts.latestBtn.classList.toggle('show', showFollow);
+    }
 
     parts.whereMode.textContent = mode.statusLabel(active);
 

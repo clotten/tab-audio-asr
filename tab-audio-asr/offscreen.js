@@ -28,6 +28,7 @@ import {
   needsTranslation,
   translationStats
 } from './lib/translate.js';
+import { looksTruncated, informationUnits, splitInHalf } from './lib/coverage.js';
 import { detectSpeechRegions, createStreamingSegmenter } from './lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -1275,7 +1276,7 @@ function wavToSamples(arrayBuffer) {
  * 把一段完整的 16k 单声道 PCM 按窗口切句后逐段转写。
  * 「离线精校」和「整段提取」共用这一条路——两者的差别只在音频从哪来。
  */
-async function transcribeWindowed(samples, { maxRegionMs = 20000, onProgress, shouldStop } = {}) {
+async function transcribeWindowed(samples, { maxRegionMs = 12000, onProgress, shouldStop, retryBudget = 24 } = {}) {
   const total = samples.length;
   const winSamples = REFINE_WINDOW_SEC * TARGET_RATE;
   const out = [];
@@ -1292,32 +1293,59 @@ async function transcribeWindowed(samples, { maxRegionMs = 20000, onProgress, sh
       maxJoinGapMs: 2500
     });
 
+    // 把一段采样送去识别（返回 { text, raw, bytes }）
+    const runOne = async (seg) => {
+      const slice = window.subarray(seg.startSample, seg.endSample);
+      const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
+      const raw = await callTranscribe(wav, out.length);
+      return { text: acceptText(raw, seg.durationMs), raw, bytes: wav.size };
+    };
+
     for (const region of regions) {
       if (shouldStop && shouldStop()) return out; // 用户取消：保留已完成的段
       const absStartMs = Math.round((start / TARGET_RATE) * 1000) + region.startMs;
-      const slice = window.subarray(region.startSample, region.endSample);
-      const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
 
-      let raw = '';
+      let parts;
       try {
-        raw = await callTranscribe(wav, out.length);
+        const one = await runOne(region);
+        parts = [{ ...one, offsetMs: 0, durationMs: region.durationMs }];
+
+        // 密度体检：长段却几乎没字 → 云端大概率截断了（语速快的视频常见）。
+        // 切两半重试，信息量明显更大才替换；有次数预算，避免一路翻倍烧钱。
+        if (one.text && retryBudget > 0 && looksTruncated(one.text, region.durationMs)) {
+          const halves = splitInHalf(region.startSample, region.endSample);
+          if (halves) {
+            retryBudget -= 1;
+            const halfMs = Math.round(region.durationMs / 2);
+            const two = [];
+            for (let h = 0; h < halves.length; h++) {
+              const r = await runOne({ ...halves[h], durationMs: halfMs });
+              if (r.text) two.push({ ...r, offsetMs: h === 0 ? 0 : halfMs, durationMs: halfMs });
+            }
+            const gained = two.reduce((n, t) => n + informationUnits(t.text), 0);
+            if (gained > informationUnits(one.text) * 1.25) {
+              parts = two;
+              if (state?.diag) state.diag.splitRetries = (state.diag.splitRetries || 0) + 1;
+            }
+          }
+        }
       } catch (err) {
         noteError(`第 ${out.length + 1} 段失败：${err?.message || err}`);
         continue;
       }
 
-      const text = acceptText(raw, region.durationMs);
-      if (!text) continue;
-
-      out.push({
-        index: out.length,
-        startMs: absStartMs,
-        durationMs: region.durationMs,
-        status: 'done',
-        text,
-        raw,
-        bytes: wav.size
-      });
+      for (const seg of parts) {
+        if (!seg.text) continue;
+        out.push({
+          index: out.length,
+          startMs: absStartMs + (seg.offsetMs || 0),
+          durationMs: seg.durationMs,
+          status: 'done',
+          text: seg.text,
+          raw: seg.raw,
+          bytes: seg.bytes
+        });
+      }
 
       if (onProgress) await onProgress(out.length);
     }
