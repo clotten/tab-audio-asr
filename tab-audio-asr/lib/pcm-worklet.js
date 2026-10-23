@@ -13,6 +13,15 @@ class PcmTap extends AudioWorkletProcessor {
     this.blockSize = size;
     this.buf = new Float32Array(size);
     this.n = 0;
+    this.port.onmessage = event => {
+      if (event.data !== 'flush') return;
+      if (this.n) {
+        const tail = this.buf.slice(0, this.n);
+        this.port.postMessage(tail, [tail.buffer]);
+        this.n = 0;
+      }
+      this.port.postMessage({ type: 'flushed' });
+    };
   }
 
   process(inputs) {
@@ -23,7 +32,9 @@ class PcmTap extends AudioWorkletProcessor {
     if (!ch) return true;
 
     for (let i = 0; i < ch.length; i++) {
-      this.buf[this.n++] = ch[i];
+      let sample = 0;
+      for (const channel of input) sample += channel[i] || 0;
+      this.buf[this.n++] = sample / input.length;
       if (this.n === this.blockSize) {
         const out = this.buf;
         this.port.postMessage(out, [out.buffer]);

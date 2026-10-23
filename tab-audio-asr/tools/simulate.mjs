@@ -780,7 +780,8 @@ console.log('\n9) 通用过滤规则：复读/超速的内容要丢掉');
 {
   // 不再用"具体句子黑名单"，而是用与内容无关的规则：
   // 这里让识别接口返回一个"复读机"式的结果，验证复读检测会拦下它。
-  asrReply = '快去订阅快去订阅快去订阅';
+  // 复读阈值放宽到「≥4 次且总长 ≥16」（避免误删强调式重复），所以这里用 5 次
+  asrReply = '快去订阅快去订阅快去订阅快去订阅快去订阅';
   const start3 = await bus.send('popup', { type: 'START', tabId: 1, settings: SETTINGS });
   check('START 成功', start3?.ok === true, JSON.stringify(start3));
 

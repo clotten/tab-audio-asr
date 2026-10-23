@@ -475,7 +475,6 @@ try {
       e.stopPropagation();
       followLatest = true;
       followPausedUntil = 0;
-      latestBtn.classList.remove('show');
 
       // 行为交给模式：录制时滚到最新，静态稿滚到当前句
       if (resolveMode().scrollTarget === 'current') {
@@ -997,10 +996,8 @@ try {
     const mode = resolveMode();
     if (parts.latestBtn) {
       parts.latestBtn.textContent = mode.followLabel;
-      // 静态稿（整段提取/导入）里这个按钮常驻，随时能把视线拉回当前句；
-      // 录制模式仍然是“滚离底部才出现”。
-      const showFollow = mode.scrollTarget === 'current' ? true : !followLatest;
-      parts.latestBtn.classList.toggle('show', showFollow);
+      // 常驻显示：以前是滚离底部才出现，用户点一次就再也看不到（踩过）；现在两种模式都一直显示。
+      parts.latestBtn.classList.add('show');
     }
 
     parts.whereMode.textContent = mode.statusLabel(active);

@@ -54,11 +54,13 @@ console.log('\n3) 稀疏下限（长音频只出几个字）');
 
 console.log('\n4) 复读检测（模型卡死的典型故障）');
 {
-  check('同短语 3 次 → 丢', hasRepetition('谢谢观看谢谢观看谢谢观看'));
-  check('交替复读 → 丢', hasRepetition('好的好的好的好的'));
+  // 阈值放宽到"≥4 次且总长 ≥16"：3 次重复可能是正常强调，不再判为故障
+  check('同短语 3 次 → 不丢（可能是强调）', !hasRepetition('谢谢观看谢谢观看谢谢观看'));
+  check('同短语 5 次 → 丢（模型卡住）', hasRepetition('谢谢观看谢谢观看谢谢观看谢谢观看谢谢观看'));
+  check('同一短语叠 4 次且够长 → 丢', hasRepetition('请订阅频道请订阅频道请订阅频道请订阅频道'));
   check('正常重复不算（2 次）', !hasRepetition('好的好的，我们开始'));
   check('长句不误判', !hasRepetition('今天我们来学习无线局域网的组成，本部分包括以下四个内容'));
-  check('复读句整体判为幻觉', looksLikeHallucination('请订阅请订阅请订阅', 3000));
+  check('复读句整体判为幻觉', looksLikeHallucination('请订阅请订阅请订阅请订阅请订阅请订阅', 3000));
 }
 
 console.log('\n5) 空内容 / 纯符号');

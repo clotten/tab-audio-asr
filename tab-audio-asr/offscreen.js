@@ -103,6 +103,9 @@ let silentRunMs = 0;   // 连续静音了多久（用来提示"页面被暂停/�
 
 // 同时保存音频（可选）
 let audioWriter = null;
+/** worklet flush 的等待器（停止时用） */
+let pcmFlushPromise = null;
+let pcmFlushResolve = null;
 let audioChain = Promise.resolve();
 
 // 增量识别（边说边出字）：同一时刻只跑一个预览请求
@@ -359,16 +362,31 @@ async function startPcmCapture() {
   startSileroLoad();
 
   let markFirst = null;
+
+  // 停止时让 worklet 把不满一块的尾巴吐出来，否则最后一个字会被截掉
+  pcmFlushResolve = null;
+  pcmFlushPromise = new Promise((resolve) => {
+    pcmFlushResolve = resolve;
+  });
   const firstBlock = new Promise((resolve) => {
     markFirst = resolve;
   });
 
   pcmNode.port.onmessage = (event) => {
+    const data = event.data;
+    // worklet 的 flush 回执是对象、不是音频块；混在一起会把对象当 Float32Array 处理
+    if (data && !(data instanceof Float32Array) && data.type === 'flushed') {
+      if (pcmFlushResolve) {
+        pcmFlushResolve();
+        pcmFlushResolve = null;
+      }
+      return;
+    }
     if (markFirst) {
       markFirst();
       markFirst = null;
     }
-    handlePcm(event.data);
+    handlePcm(data);
   };
 
   pcmSource.connect(pcmNode);
@@ -1818,7 +1836,15 @@ async function stopInternal(reason) {
   // 实时通路：把最后没说完的半句收尾
   if (segmenter) {
     try {
-      for (const seg of segmenter.flush()) enqueuePcmSegment(seg);
+      // 先让 worklet 把不满一块的尾巴吐出来（否则最后一个字会被截掉），再收尾分段器
+    try {
+      pcmNode?.port?.postMessage('flush');
+      await Promise.race([pcmFlushPromise || Promise.resolve(), new Promise((r) => setTimeout(r, 300))]);
+    } catch {
+      /* 拿不到就算了，别阻塞停止流程 */
+    }
+
+    for (const seg of segmenter.flush()) enqueuePcmSegment(seg);
     } catch {
       /* ignore */
     }

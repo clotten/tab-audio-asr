@@ -17,6 +17,8 @@
  */
 
 export const SILERO_FRAME_SIZE = 512; // 16kHz 下的固定窗口
+/** Silero v5 流式上下文长度（官方要求 64） */
+const SILERO_CONTEXT_SIZE = 64;
 
 /**
  * @param {{ort: any, modelBuffer: ArrayBuffer, sampleRate?: number}} opts
@@ -31,6 +33,9 @@ export async function createSileroVad({ ort, modelBuffer, sampleRate = 16000 }) 
     new ort.Tensor('float32', new Float32Array(2 * 1 * 128), [2, 1, 128]);
 
   let state = zeroState();
+
+    // Silero 的流式上下文（上一帧最后 64 个采样）
+    let context = new Float32Array(SILERO_CONTEXT_SIZE);
   const srTensor =
     typeof BigInt64Array !== 'undefined'
       ? new ort.Tensor('int64', BigInt64Array.from([BigInt(sampleRate)]), [])
@@ -41,12 +46,22 @@ export async function createSileroVad({ ort, modelBuffer, sampleRate = 16000 }) 
     sampleRate,
     reset() {
       state = zeroState();
+      context = new Float32Array(SILERO_CONTEXT_SIZE);
     },
     /** 喂一帧（必须正好 512 个采样），返回 0–1 的语音概率 */
     async push(frame) {
-      const input = new ort.Tensor('float32', frame, [1, SILERO_FRAME_SIZE]);
+      if (frame.length !== SILERO_FRAME_SIZE) throw new Error('VAD 帧长度必须为 512');
+
+      // 官方 ONNX 流式调用要求每次输入 64（上一帧尾巴）+ 512 个采样，
+      // 少了这 64 个前帧，概率会明显偏斜 —— 朋友那版已按官方实现改过（实测更准）。
+      const samples = new Float32Array(SILERO_CONTEXT_SIZE + SILERO_FRAME_SIZE);
+      samples.set(context);
+      samples.set(frame, SILERO_CONTEXT_SIZE);
+
+      const input = new ort.Tensor('float32', samples, [1, samples.length]);
       const out = await session.run({ input, state, sr: srTensor });
       state = out.stateN;
+      context = frame.slice(-SILERO_CONTEXT_SIZE);
       const data = out.output?.data;
       return data && data.length ? Number(data[0]) : 0;
     }

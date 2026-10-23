@@ -1,46 +1,60 @@
 /**
  * hallucination.js —— 过滤语音模型在"没有真正人声"时编出来的内容
  *
- * 设计原则：**不收句子黑名单**。
+ * 设计原则：**不做内容判断，只做物理约束**，而且阈值必须**按语种分开**。
  *
- *   上一版我写了一串具体句子（"I'm a man of few words"、"中国共产党中央委员会"…），
- *   那是特例处理：换个模型、换个语言就漏，还容易误伤真的说了这句话的音频。
+ * 踩过的坑：上一版用一个 `MAX_CHARS_PER_SEC = 11`（按"中文 字/秒"定的）去卡所有语言。
+ * 英文的字符密度天生比中文高——
+ *   "all you had to do was strike up a conversation with them"
+ * 约 3 秒说完 = 17 字符/秒，被当成"人不可能说这么快"整句丢掉。
+ * 这正是语速快的英文视频"缺好多句子"的主因之一（实测约 30% 丢句）。
  *
- *   现在只保留**与内容无关的物理约束**，三条都不依赖任何具体词：
+ * 现在：
+ *   1. 只有标点/空白 → 丢（这不是人话）
+ *   2. 语速超过物理上限 → 丢（中文 11 字/秒、英文 6 词/秒）
+ *   3. 稀疏下限（长音频只出几个字）→ 丢（音乐/噪声里的杂音）
+ *   4. 复读：同一 4–20 字符片段出现 ≥4 次且总长 ≥16 → 丢（模型卡住）
+ *      阈值比原来宽，避免把"我受够了我受够了"这种**故意重复**误删
  *
- *   1. 语速上限：人说话有物理极限。单位时间字数超过 11 字/秒 → 不可能是这段音频的内容。
- *   2. 稀疏下限：长音频只出几个字 → 那是音乐/噪声里的杂音，不是句子。
- *   3. 复读：模型卡住时会反复输出同一片段（"谢谢观看谢谢观看谢谢观看"）——
- *      这是自回归模型的典型故障，与语义无关。
- *
- *   而"这段到底有没有人声"这个根本问题，交给 Silero VAD（lib/silero.js）在识别前判断，
- *   那才是通用解法，不靠猜测输出文本。
+ * 而"这段到底有没有人声"交给 Silero VAD 判断，那才是通用解法，不靠猜文本。
  */
 
-/** 中文正常语速上限约 8 字/秒，留点余量取 11 字/秒 */
-const MAX_CHARS_PER_SEC = 11;
+/** 中文正常语速上限约 8 字/秒，留余量取 11 */
+const MAX_CJK_PER_SEC = 11;
 
-/** 长时间只出几个字，基本是音乐/噪声（正常语速 3–6 字/秒） */
-const MIN_CHARS_PER_SEC = 0.8;
+/** 英文正常语速约 3–4 词/秒，快嘴可到 6，取 6 词/秒 */
+const MAX_LATIN_WORDS_PER_SEC = 6;
 
-/** 复读检测：同一片段重复这么多次就认为是故障 */
-const REPEAT_MIN_LEN = 3;
-const REPEAT_MIN_COUNT = 3;
-const REPEAT_MIN_TOTAL = 9;
+/** 稀疏下限 */
+const MIN_CJK_PER_SEC = 0.8;
+const MIN_LATIN_WORDS_PER_SEC = 0.5;
 
-/** 去掉空白和标点后的字数 */
+/** 复读检测阈值（放宽，避免误删强调式重复） */
+const REPEAT_MIN_LEN = 4;
+const REPEAT_MIN_COUNT = 4;
+const REPEAT_MIN_TOTAL = 16;
+
+const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g;
+const LATIN_RE = /[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*/g;
+
+/** 去掉空白和标点后的字符数 */
 export function contentLength(text) {
   return String(text || '').replace(/[\s\p{P}]/gu, '').length;
 }
 
+/** 这段文本主要是中文还是拉丁字母 */
+export function scriptOf(text) {
+  const s = String(text || '');
+  const cjk = (s.match(CJK_RE) || []).length;
+  const latin = (s.match(LATIN_RE) || []).length;
+  return cjk >= latin ? 'cjk' : 'latin';
+}
+
 /**
- * 复读检测（与内容无关）：同一段 4–20 字的片段出现 3 次以上。
- * 只看"有没有反复出现同一串"，不需要知道那串是什么。
+ * 复读检测（与内容无关）：同一 4–20 字符片段出现 4 次以上。
  */
 export function hasRepetition(text) {
   const s = String(text || '').replace(/[\s\p{P}]/gu, '');
-  // 注意：不要用"长度 ≥ 3×词长"这种上限判断——重叠匹配时
-  // "好的好的好的好的"（8 字）里同一 3 字段出现 3 次，长度只有 8。
   const maxLen = Math.min(20, Math.floor(s.length / 2));
   for (let len = REPEAT_MIN_LEN; len <= maxLen; len++) {
     const counts = new Map();
@@ -57,27 +71,31 @@ export function hasRepetition(text) {
 /**
  * 判断一段识别结果是不是"不该收的内容"。
  * @param {string} text 识别文本
- * @param {number} durationMs 这段音频的时长
+ * @param {number} durationMs 这段音频的时长（0/未知时跳过时序判断）
  */
 export function looksLikeHallucination(text, durationMs) {
   const s = String(text || '').trim();
   if (!s) return true;
 
-  // 只有标点/空白
+  // ① 只有标点/空白 → 不是人话
   if (!/[\p{L}\p{N}]/u.test(s)) return true;
 
+  const sec = (Number(durationMs) || 0) / 1000;
+  const kind = scriptOf(s);
+  const words = (s.match(LATIN_RE) || []).length;
   const chars = contentLength(s);
-  if (!chars) return true;
 
-  const sec = Math.max(0.2, (Number(durationMs) || 0) / 1000);
+  // ② 语速超过物理上限 → 不可能是这段音频的内容（按语种分别定阈值）
+  if (sec > 0.2) {
+    if (kind === 'cjk' ? chars / sec > MAX_CJK_PER_SEC : words / sec > MAX_LATIN_WORDS_PER_SEC) return true;
+  }
 
-  // ① 太快 → 物理上不可能
-  if (chars / sec > MAX_CHARS_PER_SEC) return true;
+  // ③ 稀疏下限：长音频只出几个字（音乐/噪声）
+  if (sec >= 8) {
+    if (kind === 'cjk' ? chars / sec < MIN_CJK_PER_SEC : words / sec < MIN_LATIN_WORDS_PER_SEC) return true;
+  }
 
-  // ② 太稀 → 长音频只出几个字（正常语速 3–6 字/秒）
-  if (sec >= 8 && chars / sec < MIN_CHARS_PER_SEC) return true;
-
-  // ③ 复读 → 模型卡住了
+  // ④ 复读
   if (hasRepetition(s)) return true;
 
   return false;
