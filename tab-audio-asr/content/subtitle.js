@@ -164,6 +164,9 @@ try {
   let rowEls = new Map(); // item.index → row element
   let lastSig = '';
   let followLatest = true;
+  // 用户手动滚动后只暂停一会儿，之后自动接回跟随（不是永久关掉）
+  let followPausedUntil = 0;
+  const FOLLOW_PAUSE_MS = 8000;
   let resizing = false;
   let sizeTimer = null;
   let lastCurIndex = null;
@@ -471,6 +474,7 @@ try {
     latestBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       followLatest = true;
+      followPausedUntil = 0;
       latestBtn.classList.remove('show');
 
       // 行为交给模式：录制时滚到最新，静态稿滚到当前句
@@ -549,9 +553,9 @@ try {
       if (Date.now() < scrollGuardUntil) return; // 这是我们自己滚的，不算用户操作
 
       if (resolveMode().scrollTarget === 'current') {
-        // 静态稿：任何用户滚动都暂停跟随，点「跟随播放」恢复
-        followLatest = false;
-        latestBtn.classList.add('show');
+        // 静态稿：手动滚动只暂停 8 秒，之后自动接回；想立刻回来就点「跟随播放」。
+        // （之前是永久关掉，滚一次就再也不跟了——踩过）
+        followPausedUntil = Date.now() + FOLLOW_PAUSE_MS;
         return;
       }
 
@@ -757,10 +761,12 @@ try {
     const er = el.getBoundingClientRect();
     if (!br.height) return;
 
-    // 目标：把这一行放到可视区**正中**。
-    // 注意别用"已经可见就跳过"——行刚滚到底边时也算可见，结果永远不居中。
-    const delta = er.top - br.top - (br.height - er.height) / 2;
-    if (Math.abs(delta) < 6) return; // 已经在中间了，别抖
+    // 目标：把这一行放到可视区**正中**，但双语字幕会把每行撑成两行文本，
+    // 行高可能接近甚至超过可视区——这时"整行居中"数学上无解（会被 max 夹到底部，
+    // 看起来就是永远不居中）。所以行太高时改成**贴顶对齐**，至少能读到开头。
+    const tooTall = er.height > br.height * 0.8;
+    const delta = tooTall ? er.top - br.top - 6 : er.top - br.top - (br.height - er.height) / 2;
+    if (Math.abs(delta) < 6) return; // 已经到位，别抖
 
     const max = Math.max(0, body.scrollHeight - body.clientHeight);
     scrollGuardUntil = Date.now() + 500;
@@ -969,7 +975,7 @@ try {
       // 静态稿（整段提取/导入）：定位到"视频当前播到的那一句"。
       // 句子之间有空档，所以由 currentIndexFor 回退到"前面最近的一句"；
       // 一句都还没到（视频没开始播）就停在顶部，绝不跳到末尾。
-      if (resolveMode().scrollTarget === 'current' && followLatest) {
+      if (resolveMode().scrollTarget === 'current' && followLatest && Date.now() >= followPausedUntil) {
         const video = findVideo();
         const t = video ? video.currentTime : null;
         const target = currentIndexFor(items, t);

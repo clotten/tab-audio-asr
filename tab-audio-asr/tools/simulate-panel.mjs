@@ -78,6 +78,7 @@ class FakeEl {
   }
 
   get scrollHeight() {
+    if (this._scrollHeight != null) return this._scrollHeight;
     return this.children.reduce((n, c) => n + (c.tagName === 'STYLE' ? 0 : 30), 0);
   }
 
@@ -472,7 +473,9 @@ console.log('\n12) 别的视频的稿子不显示在本页');
   const rows = body.children.filter((c) => c.className.includes('row'));
   check('不显示其他视频的字幕行', rows.length === 0, 'rows=' + rows.length);
 
-  const empty = body.children.find((c) => c.classList.contains('empty'));
+  const empty = body.children.find((c) => c.className && c.className.includes('empty'));
+  check('给出提示文案', (empty?.textContent || '').includes('本页还没有'), empty?.textContent);
+}
 
 
 console.log('\n14) 整段提取期间：不显示「正在聆听」');
@@ -523,7 +526,16 @@ console.log('\n15) 双语字幕：有译文时每行两行文本');
   check('没有译文的行只有一段', second.length === 1, String(second.length));
 }
 
+
+console.log('\n16) 跟随播放：手动滚动只暂停，不永久关闭');
+{
+  const srcText = readFileSync(new URL('../content/subtitle.js', import.meta.url), 'utf8');
+  check('有 followPausedUntil 暂停机制', srcText.includes('followPausedUntil'), '');
+  check('暂停是有时限的（FOLLOW_PAUSE_MS）', /FOLLOW_PAUSE_MS\s*=\s*\d+/.test(srcText), '');
+  check('滚动不再写 followLatest = false', !/followLatest = false/.test(srcText), '还存在永久关闭');
+  check('点跟随按钮会解除暂停', /followPausedUntil = 0;/.test(srcText), '');
 }
+
 console.log('\n11) 源码不变式：滚动目标必须由模式决定');
 {
   const src = readFileSync(new URL('../content/subtitle.js', import.meta.url), 'utf8');

@@ -20,7 +20,7 @@ const DEFAULTS = {
   incrementalAsr: true,
   correctModel: 'Qwen/Qwen2.5-7B-Instruct',
   translateBaseUrl: 'https://api.deepseek.com/v1',
-  translateModel: 'deepseek-chat',
+  translateModel: 'deepseek-flash',
   translateTarget: '中文',
   glossary: '',
 
@@ -1354,3 +1354,4 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
+

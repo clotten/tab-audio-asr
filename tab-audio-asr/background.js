@@ -629,6 +629,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             tabTitle: doc.title || '',
             startedAt: doc.createdAt || Date.now(),
             stoppedAt: Date.now(),
+            // doc.segments 里可能带 translation（双语），原样铺开
             segments: doc.segments.map((s, idx) => ({ ...s, index: idx, status: 'done' })),
             transcript: doc.segments.map((s) => s.text).join('\\n'),
             pending: 0,
@@ -806,6 +807,7 @@ chrome.runtime.onStartup.addListener(async () => {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
 
 
 

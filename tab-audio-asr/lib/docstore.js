@@ -27,7 +27,16 @@ export function buildDoc({ key, segments, model = '', title = '', durationMs = 0
 
   const kept = (segments || [])
     .filter((s) => s && s.status === 'done' && s.text)
-    .map((s) => ({ startMs: Math.max(0, Math.round(s.startMs || 0)), durationMs: Math.max(0, Math.round(s.durationMs || 0)), text: String(s.text) }))
+    .map((s) => {
+      const item = {
+        startMs: Math.max(0, Math.round(s.startMs || 0)),
+        durationMs: Math.max(0, Math.round(s.durationMs || 0)),
+        text: String(s.text)
+      };
+      // 译文也要存：否则从字幕库恢复后双语就没了（真机踩过）
+      if (s.translation) item.translation = String(s.translation);
+      return item;
+    })
     .sort((a, b) => a.startMs - b.startMs);
 
   if (kept.length < MIN_SEGMENTS) return null;
@@ -111,3 +120,4 @@ export function sanitizeDocs(raw) {
   }
   return out;
 }
+

@@ -63,7 +63,7 @@ const DEFAULTS = {
   // 翻译（生成双语字幕）用**另一套**接口，默认 DeepSeek
   translateBaseUrl: 'https://api.deepseek.com/v1',
   translateApiKey: '',
-  translateModel: 'deepseek-chat',
+  translateModel: 'deepseek-flash', // 实测可用；名字不对会自动换备选重试
   translateTarget: '中文',
   glossary: '',           // 空 = 用内置默认术语表
   subtitle: { enabled: true, fontSize: 15 }
@@ -1073,11 +1073,21 @@ async function callChat(messages) {
  * 调翻译接口（默认 DeepSeek，和识别接口是两套配置）。
  * 一轮一次请求，失败就整批失败——字幕错位比没翻译糟糕。
  */
-async function callTranslateApi(messages) {
+/**
+ * 模型名候选：各家命名不一样（deepseek-flash / deepseek-chat / 带厂商前缀的），
+ * 配置里错一个词就整批失败，所以遇到"模型不存在"时自动换下一个试。
+ */
+const TRANSLATE_MODEL_CANDIDATES = [
+  'deepseek-flash',
+  'deepseek-chat',
+  'deepseek-reasoner',
+  'deepseek-ai/DeepSeek-V3',
+  'Qwen/Qwen2.5-7B-Instruct'
+];
+
+async function callTranslateApiOnce(messages, model) {
   const base = settings.translateBaseUrl || DEFAULTS.translateBaseUrl;
   const key = settings.translateApiKey || settings.apiKey;
-  const model = settings.translateModel || DEFAULTS.translateModel;
-
   if (!key) throw new Error('没有填翻译用的 API Key');
 
   const res = await fetch(joinUrl(base, '/chat/completions'), {
@@ -1087,20 +1097,51 @@ async function callTranslateApi(messages) {
   });
 
   const text = await res.text();
-  if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw new Error(`翻译接口拒绝（HTTP ${res.status}）：Key 或模型无权限`);
-    if (res.status === 404) throw new Error(`翻译接口 404：检查地址和模型名（当前模型 ${model}）`);
-    throw new Error(`翻译接口 HTTP ${res.status}：${text.slice(0, 200)}`);
+  if (res.ok) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error('翻译接口返回了非 JSON');
+    }
+    return String(data?.choices?.[0]?.message?.content || '');
   }
 
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error('翻译接口返回了非 JSON');
-  }
-  return String(data?.choices?.[0]?.message?.content || '');
+  const err = new Error(`翻译接口 HTTP ${res.status}：${text.slice(0, 200)}`);
+  err.status = res.status;
+  err.body = text;
+  throw err;
 }
+
+async function callTranslateApi(messages) {
+  const configured = settings.translateModel || DEFAULTS.translateModel;
+  const tried = [];
+  const queue = [configured, ...TRANSLATE_MODEL_CANDIDATES.filter((m) => m !== configured)];
+
+  let lastErr = null;
+  for (const model of queue) {
+    try {
+      const out = await callTranslateApiOnce(messages, model);
+      if (model !== configured) {
+        // 自动挑对了就记住，之后不再白白失败一次
+        settings.translateModel = model;
+        if (state) state.diag.translateModel = model;
+      }
+      return out;
+    } catch (e) {
+      lastErr = e;
+      tried.push(`${model}(${e.status || 'x'})`);
+      // 只有"模型不存在 / 参数不认"才换名字；鉴权、限流、超时都不该换
+      const looksLikeModelIssue = e.status === 400 || e.status === 404;
+      if (!looksLikeModelIssue) break;
+    }
+  }
+
+  const authHint = lastErr?.status === 401 || lastErr?.status === 403 ? '：Key 没有权限' : '';
+  const body = lastErr?.body ? '｜' + String(lastErr.body).slice(0, 160) : '';
+  throw new Error(`翻译失败${authHint}（试过 ${tried.join(' → ')}）${body}`);
+}
+
 
 /** 把当前会话里还没翻译的句子翻掉（原地更新 state） */
 async function handleTranslateAll() {
@@ -1896,6 +1937,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
+
 
 
 

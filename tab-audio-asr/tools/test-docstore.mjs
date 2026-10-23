@@ -49,6 +49,20 @@ console.log('\n1) buildDoc：整理成可存储的文档');
   check('没有句子返回 null', buildDoc({ key: 'k', segments: [] }) === null);
 }
 
+console.log('\n1.5) 译文要一起存（双语字幕）');
+{
+  const doc = buildDoc({
+    key: 'k-bi',
+    segments: [
+      { status: 'done', text: 'おはよう', translation: '早上好', startMs: 0, durationMs: 2000 },
+      { status: 'done', text: 'ありがとう', startMs: 2000, durationMs: 2000 }
+    ]
+  });
+  check('有译文的句子保留 translation', doc.segments[0].translation === '早上好', String(doc.segments[0].translation));
+  check('没译文的句子不加字段', !('translation' in doc.segments[1]));
+  check('原文没被动过', doc.segments[0].text === 'おはよう');
+}
+
 console.log('\n2) 存 / 取 / 删');
 {
   let docs = {};
@@ -135,4 +149,5 @@ if (failed) {
   process.exit(1);
 }
 console.log('全部通过');
+
 
