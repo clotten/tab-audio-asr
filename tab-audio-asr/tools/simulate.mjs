@@ -494,6 +494,9 @@ const offscreenSource = readFileSync(join(root, 'offscreen.js'), 'utf8').replace
 );
 
 const offscreenCtx = vm.createContext({
+  // requestText 用 AbortController 做截止时间
+  AbortController,
+  AbortSignal,
   chrome: offscreenChrome,
   console,
   setTimeout,

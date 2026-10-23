@@ -749,3 +749,49 @@ $env:SILICONFLOW_API_KEY_FILE="C:\...\.siliconflow-key"
 设置页的操作按钮必须**吸顶**，因为它的使用路径永远是"改 → 立刻保存"。
 
 
+
+---
+
+## 十八、测试怎么跑（19 个脚本，分三层）
+
+### 第一层：静态检查（几秒，每次改完都跑）
+
+```bash
+node tools/strip-bom.mjs          # 有没有 BOM（manifest 带 BOM 会装不上）
+node tools/lint-csp.mjs           # 内联脚本 / on*= 属性（MV3 CSP 会拦）
+node tools/check-sendresponse.mjs # 用了 sendResponse 就必须在 onMessage 签名里声明
+node tools/lint-offscreen-apis.mjs# offscreen 里只许用 chrome.runtime
+node tools/check-vendor.mjs       # ORT 的 .mjs/.wasm 齐不齐
+```
+
+### 第二层：单元测试（纯逻辑，不碰浏览器）
+
+```bash
+node tools/test-coverage.mjs      # 截断判定：密度 / 句尾悬空 / 切半 / 择优
+node tools/test-hallucination.mjs # 过滤规则：语速上限按语种分开、复读阈值
+node tools/test-translate.mjs     # 翻译：分批 / 提示词 / 脏格式解析 / 回填
+node tools/test-videokey.mjs      # 视频 key：签名参数、ID 参数、时长
+node tools/test-docstore.mjs      # 字幕库：整理 / 淘汰 / 译文保留
+node tools/test-wav.mjs           # WAV 编解码
+node tools/test-vad.mjs           # 能量分段
+node tools/test-stream.mjs        # 流式分段器
+node tools/test-incremental.mjs   # 增量提交
+node tools/test-glossary.mjs      # 术语表
+node tools/test-silero.mjs        # Silero VAD 的 64 采样上下文
+```
+
+### 第三层：跨上下文仿真 + 交付物
+
+```bash
+node tools/simulate.mjs           # popup/SW/offscreen 三方消息全链路（19 个场景）
+node tools/simulate-panel.mjs     # 浮窗 DOM：渲染/高亮/滚动/双语（16 个场景）
+node tools/smoke.mjs              # 冒烟：dist 包能不能被浏览器接受
+```
+
+**冒烟测试单独说一下**：它不测逻辑，测"交付物"——manifest 可解析、引用的文件都在、
+JS 语法可解析、没有内联脚本、模块导出名对得上、没有 API Key 泄漏、体积合理。
+发朋友之前跑这一条就够了，它会把"装不上"这类问题挡住。
+
+```bash
+node tools/build-dist.mjs && node tools/smoke.mjs
+```

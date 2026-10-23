@@ -1061,16 +1061,20 @@ async function callChat(messages) {
   const url = joinUrl(settings.baseUrl, '/chat/completions');
   const model = settings.correctModel || DEFAULTS.correctModel;
 
-  const res = await fetch(url, {
+  const res = await requestText(
+    url,
+    {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 2048 })
-  });
+  },
+    60000
+  );
 
-  const text = await res.text();
+  const text = res.text;
   if (!res.ok) {
     if (res.status === 404) throw new Error(`纠错模型不存在（404），检查模型名：${model}`);
     if (res.status === 401 || res.status === 403) throw new Error(`API Key 无权使用纠错模型（${res.status}）`);
@@ -1109,13 +1113,17 @@ async function callTranslateApiOnce(messages, model) {
   const key = settings.translateApiKey || settings.apiKey;
   if (!key) throw new Error('没有填翻译用的 API Key');
 
-  const res = await fetch(joinUrl(base, '/chat/completions'), {
+  const res = await requestText(
+    joinUrl(base, '/chat/completions'),
+    {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: 4096 })
-  });
+  },
+    90000
+  );
 
-  const text = await res.text();
+  const text = res.text;
   if (res.ok) {
     let data;
     try {
@@ -1623,15 +1631,45 @@ async function handleRefine() {
   state.diag.refineDone = 0;
   await saveState();
 
-  const refined = await transcribeWindowed(samples, {
-    retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
-    onProgress: async (count) => {
-      state.diag.refineDone = count;
+  let refined;
+  try {
+    refined = await transcribeWindowed(samples, {
+      retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
+      onProgress: async (count) => {
+        state.diag.refineDone = count;
+        await saveState();
+      }
+    });
+  } catch (err) {
+    // 精校失败：保留原稿，只报错（绝不半途替换掉可用稿）
+    if (state) {
+      state.diag.refining = false;
+      state.diag.refineError = String(err?.message || err);
       await saveState();
     }
-  });
+    return { ok: false, error: `精校失败：${err?.message || err}（原稿保留）` };
+  }
 
-  // 用精校结果整体替换实时结果
+  // 原子替换：**所有分段都拿到非空文本**才替换；
+  // 否则说明这次跑得不完整，保留原稿更安全（朋友版的同款策略）。
+  const usable = (refined || []).filter((s) => s && s.text && String(s.text).trim());
+  const before = (state.segments || []).filter((s) => s && s.text).length;
+  if (!usable.length) {
+    if (state) {
+      state.diag.refining = false;
+      await saveState();
+    }
+    return { ok: false, error: '精校没有产出可用句子（原稿保留）' };
+  }
+  if (usable.length < Math.max(1, Math.floor(before * 0.6))) {
+    if (state) {
+      state.diag.refining = false;
+      state.diag.refineError = `只产出 ${usable.length} 句（原本 ${before} 句）`;
+      await saveState();
+    }
+    return { ok: false, error: `精校只产出 ${usable.length} 句（原本 ${before} 句），疑似不完整，已保留原稿` };
+  }
+
   state.segments = refined;
   state.refined = true;
   state.diag.refining = false;
@@ -1712,6 +1750,28 @@ async function handleCorrectAll() {
  *   - model: 模型名
  *   - 返回 { "text": "..." }
  */
+/**
+ * 带截止时间的请求：连接和读正文共用同一个 deadline。
+ *
+ * 之前只靠 fetch 自身（其实没有超时）：响应头回来了、正文一直不来时，
+ * 串行上传队列会被这一个请求永久堵住，表现是卡住不动且没有任何报错。
+ * 识别 / 翻译 / 对话三处都复用它。
+ */
+async function requestText(url, options, timeoutMs = 45000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const text = await response.text();
+    return { ok: response.ok, status: response.status, text };
+  } catch (err) {
+    if (controller.signal.aborted) throw new Error('接口请求超时（网络太慢或服务无响应），稍后重试');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callTranscribe(wavBlob, index) {
   const url = joinUrl(settings.baseUrl, '/audio/transcriptions');
   const startedAt = Date.now();
@@ -1723,11 +1783,17 @@ async function callTranscribe(wavBlob, index) {
 
     let res;
     try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${settings.apiKey}` },
-        body: form
-      });
+      // 实时预览（index < 0）要快；正式稿给足时间
+      const budget = index < 0 ? 12000 : 45000;
+      res = await requestText(
+        url,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${settings.apiKey}` },
+          body: form
+        },
+        budget
+      );
     } catch (err) {
       if (attempt === 3) throw new Error(`网络请求失败：${err?.message || err}`);
       await sleep(1200 * attempt);
@@ -1735,7 +1801,7 @@ async function callTranscribe(wavBlob, index) {
     }
 
     if (res.ok) {
-      const text = await res.text();
+      const text = res.text;
       let parsed;
       try {
         parsed = JSON.parse(text);
