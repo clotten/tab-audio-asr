@@ -707,6 +707,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
 
+        case 'TRANSLATE_ALL': {
+          // 翻译分批走，可能要几十秒到几分钟
+          const res = await callOffscreenTask({ type: 'TRANSLATE_ALL' }).catch((err) => ({
+            ok: false,
+            error: '后台页面未响应：' + String(err?.message || err)
+          }));
+          sendResponse(res || { ok: false, error: '没有响应' });
+          break;
+        }
+
+        case 'TRANSLATE_CANCEL': {
+          const res = await callOffscreenTask({ type: 'TRANSLATE_CANCEL' }).catch(() => ({ ok: false }));
+          sendResponse(res || { ok: false });
+          break;
+        }
+
         case 'INGEST_CANCEL': {
           const res = await callOffscreenTask({ type: 'INGEST_CANCEL' }).catch(() => ({ ok: false }));
           sendResponse(res || { ok: false });
@@ -797,6 +813,8 @@ chrome.runtime.onStartup.addListener(async () => {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+
 
 
 

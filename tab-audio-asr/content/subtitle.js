@@ -352,6 +352,7 @@ try {
       .body::-webkit-scrollbar-track { background: transparent; }
 
       .row {
+        flex-wrap: wrap;
         display: flex;
         gap: 8px;
         padding: 3px 4px 3px 7px;
@@ -368,6 +369,8 @@ try {
         user-select: none;
       }
       .row .s { flex: 1 1 auto; word-break: break-word; white-space: pre-wrap; }
+      .row .s.tr { flex-basis: 100%; font-size: .92em; color: rgba(233,238,245,.72); margin-top: 2px; }
+      .row.cur .s.tr { color: rgba(233,238,245,.92); }
       .row.cur { border-left-color: #3b82f6; background: rgba(59,130,246,.12); }
       .row.cur .s { color: #fff; }
       .row.partial { opacity: .62; border-left-color: rgba(233,238,245,.25); }
@@ -790,7 +793,16 @@ try {
       s.className = 's';
       s.textContent = item.text;
 
+      // 译文：单独一行、字号略小、颜色淡一些（双语字幕）
+      let tr = null;
+      if (item.translation) {
+        tr = document.createElement('span');
+        tr.className = 's tr';
+        tr.textContent = item.translation;
+      }
+
       row.append(t, s);
+      if (tr) row.append(tr);
       frag.appendChild(row);
       rowEls.set(item.index, row);
     }
@@ -942,6 +954,8 @@ try {
       items.length,
       last?.index ?? '-',
       (last?.text || '').length,
+      (last?.translation || '').length,
+      items.filter((x) => x.translation).length,
       (partial?.text || '').length,
       sub.fontSize,
       sub.size?.h ?? '-'
@@ -1296,7 +1310,6 @@ try {
     }
   }
 })();
-
 
 
 

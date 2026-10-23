@@ -19,6 +19,15 @@ import { createSileroVad, createSileroGate } from './lib/silero.js';
 import { planInterim, stripCommittedOverlap } from './lib/incremental.js';
 import { buildDoc } from './lib/docstore.js';
 import { normalizeVideoUrl } from './lib/videokey.js';
+import {
+  TRANSLATE_BATCH,
+  chunkTexts,
+  buildTranslateMessages,
+  parseTranslateReply,
+  applyTranslations,
+  needsTranslation,
+  translationStats
+} from './lib/translate.js';
 import { detectSpeechRegions, createStreamingSegmenter } from './lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -51,6 +60,11 @@ const DEFAULTS = {
   sileroVad: true,        // 用 Silero VAD 判别"这段是不是人声"（拦掉音乐/掌声）
   vadThreshold: 0.25,     // 段平均语音概率低于这个值就丢掉
   correctModel: 'Qwen/Qwen2.5-7B-Instruct', // 事后纠错用的对话模型（实测最快且不乱编）
+  // 翻译（生成双语字幕）用**另一套**接口，默认 DeepSeek
+  translateBaseUrl: 'https://api.deepseek.com/v1',
+  translateApiKey: '',
+  translateModel: 'deepseek-chat',
+  translateTarget: '中文',
   glossary: '',           // 空 = 用内置默认术语表
   subtitle: { enabled: true, fontSize: 15 }
 };
@@ -1053,6 +1067,108 @@ async function callChat(messages) {
   return String(data?.choices?.[0]?.message?.content || '');
 }
 
+/* ---------------------------- 翻译（双语字幕） ---------------------------- */
+
+/**
+ * 调翻译接口（默认 DeepSeek，和识别接口是两套配置）。
+ * 一轮一次请求，失败就整批失败——字幕错位比没翻译糟糕。
+ */
+async function callTranslateApi(messages) {
+  const base = settings.translateBaseUrl || DEFAULTS.translateBaseUrl;
+  const key = settings.translateApiKey || settings.apiKey;
+  const model = settings.translateModel || DEFAULTS.translateModel;
+
+  if (!key) throw new Error('没有填翻译用的 API Key');
+
+  const res = await fetch(joinUrl(base, '/chat/completions'), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: 4096 })
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new Error(`翻译接口拒绝（HTTP ${res.status}）：Key 或模型无权限`);
+    if (res.status === 404) throw new Error(`翻译接口 404：检查地址和模型名（当前模型 ${model}）`);
+    throw new Error(`翻译接口 HTTP ${res.status}：${text.slice(0, 200)}`);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('翻译接口返回了非 JSON');
+  }
+  return String(data?.choices?.[0]?.message?.content || '');
+}
+
+/** 把当前会话里还没翻译的句子翻掉（原地更新 state） */
+async function handleTranslateAll() {
+  if (!state || !Array.isArray(state.segments) || !state.segments.length) {
+    return { ok: false, error: '还没有字幕可翻译' };
+  }
+  if (state.diag?.translating) return { ok: false, error: '正在翻译中，等它跑完' };
+
+  const target = settings.translateTarget || DEFAULTS.translateTarget;
+  const todo = state.segments.filter((s) => s.status === 'done' && needsTranslation(s));
+  if (!todo.length) {
+    const stats = translationStats(state.segments);
+    return { ok: true, translated: 0, ...stats, message: '全部句子都已经有译文' };
+  }
+
+  state.diag = state.diag || {};
+  state.diag.translating = true;
+  state.diag.translateDone = 0;
+  state.diag.translateTotal = todo.length;
+  state.diag.translateError = '';
+  await saveState();
+
+  let translated = 0;
+  try {
+    for (const batch of chunkTexts(todo, TRANSLATE_BATCH)) {
+      if (!state?.diag?.translating) break; // 被取消
+
+      const messages = buildTranslateMessages(
+        batch.map((s) => s.text),
+        { target }
+      );
+      const reply = await callTranslateApi(messages);
+      const parsed = parseTranslateReply(reply, batch.length);
+      if (!parsed) {
+        // 一批错位就整批丢，绝不按位置硬塞
+        state.diag.translateError = '模型返回的行数与原文不一致（已跳过这一批）';
+        continue;
+      }
+
+      // 回填：按原 segments 的位置写
+      const byIndex = new Map(batch.map((s, i) => [s.index, parsed[i]]));
+      state.segments = state.segments.map((s) => (byIndex.has(s.index) ? { ...s, translation: byIndex.get(s.index) } : s));
+      translated += batch.length;
+      state.diag.translateDone = translated;
+      await saveState();
+    }
+
+    const stats = translationStats(state.segments);
+    return { ok: true, translated, ...stats, target, model: settings.translateModel || DEFAULTS.translateModel };
+  } catch (err) {
+    if (state) state.diag.translateError = String(err?.message || err);
+    return { ok: false, error: String(err?.message || err), translated };
+  } finally {
+    if (state) {
+      state.diag.translating = false;
+      await saveState();
+    }
+  }
+}
+
+/** 取消翻译 */
+function cancelTranslate() {
+  if (!state?.diag?.translating) return { ok: false, error: '当前没有在翻译' };
+  state.diag.translating = false;
+  saveState();
+  return { ok: true };
+}
+
 const CORRECT_BATCH = 40;
 
 /* ---------------------------- 离线精校 ---------------------------- */
@@ -1740,6 +1856,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse(await handleRefine());
           break;
 
+        case 'TRANSLATE_ALL':
+          sendResponse(await handleTranslateAll());
+          break;
+
+        case 'TRANSLATE_CANCEL':
+          sendResponse(cancelTranslate());
+          break;
+
         case 'INGEST_CANCEL':
           sendResponse(cancelIngest());
           break;
@@ -1772,6 +1896,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 /* 这个文档没有 chrome.storage，设置一律由 popup 在 START 时带进来 */
+
+
 
 
 

@@ -19,6 +19,9 @@ const DEFAULTS = {
   sileroVad: true,
   incrementalAsr: true,
   correctModel: 'Qwen/Qwen2.5-7B-Instruct',
+  translateBaseUrl: 'https://api.deepseek.com/v1',
+  translateModel: 'deepseek-chat',
+  translateTarget: '中文',
   glossary: '',
   prescanRate: 1.5,
   subtitle: { enabled: true, fontSize: 15 }
@@ -112,6 +115,7 @@ function bindEvents() {
   el('srtBtn').addEventListener('click', exportSrt);
   el('resetBtn').addEventListener('click', resetSession);
   el('historyBtn').addEventListener('click', restoreHistory);
+  el('translateBtn').addEventListener('click', translateAll);
   el('libLoadBtn').addEventListener('click', loadFromLibrary);
   el('libDelBtn').addEventListener('click', removeFromLibrary);
   el('showDocPanelBtn').addEventListener('click', showPanel);
@@ -630,6 +634,10 @@ function fillForm() {
   el('segmentSeconds').value = settings.segmentSeconds || DEFAULTS.segmentSeconds;
   el('prescanRate').value = settings.prescanRate || DEFAULTS.prescanRate;
   el('correctModel').value = settings.correctModel || DEFAULTS.correctModel;
+  el('translateBaseUrl').value = settings.translateBaseUrl || DEFAULTS.translateBaseUrl;
+  el('translateApiKey').value = settings.translateApiKey || '';
+  el('translateModel').value = settings.translateModel || DEFAULTS.translateModel;
+  el('translateTarget').value = settings.translateTarget || DEFAULTS.translateTarget;
 
   // 术语表默认留空（通用）；这里只提示格式，示例在 examples/ 目录
   el('glossary').value = settings.glossary || '';
@@ -658,6 +666,10 @@ function readForm() {
     sileroVad: el('sileroVad').checked,
     incrementalAsr: el('incrementalAsr').checked,
     correctModel: el('correctModel').value.trim() || DEFAULTS.correctModel,
+    translateBaseUrl: el('translateBaseUrl').value.trim() || DEFAULTS.translateBaseUrl,
+    translateApiKey: el('translateApiKey').value.trim(),
+    translateModel: el('translateModel').value.trim() || DEFAULTS.translateModel,
+    translateTarget: el('translateTarget').value.trim() || DEFAULTS.translateTarget,
     glossary: el('glossary').value,
     prescanRate: Math.min(2, Math.max(1, Number(rate.toFixed(1)))),
     subtitle: {
@@ -850,6 +862,38 @@ async function showPanel() {
   if (!res?.ok) return note(`显示失败：${res?.error || '这个页面不允许注入'}`, 'err');
   note('已把文字稿显示到页面上。浮窗可拖动、缩放，右上角 × 关闭。', 'ok');
 }
+/* ------------------------------ 翻译（双语字幕） ------------------------------ */
+
+/** 把整份字幕翻成目标语言；已译过的句子会跳过，所以可以中断后再点 */
+async function translateAll() {
+  showTab('lib');
+  const btn = el('translateBtn');
+  const stats = (session?.segments || []).filter((s) => s.status === 'done' && s.text);
+  if (!stats.length) return note('还没有字幕，先「整段提取」或「开始转录」。', 'err');
+
+  btn.disabled = true;
+  btn.textContent = '翻译中…';
+  note('正在翻译（每 20 句一次请求），可以关掉弹窗，进度会写进会话）。');
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: 'TRANSLATE_ALL' });
+  } catch (err) {
+    res = { ok: false, error: String(err?.message || err) };
+  }
+
+  btn.disabled = false;
+  btn.textContent = '翻译成中文';
+
+  const { asrSession } = await chrome.storage.local.get('asrSession');
+  session = asrSession || session;
+  render();
+
+  if (!res?.ok) return note(`翻译失败：${res?.error || '未知错误'}`, 'err');
+  const extra = res.translated ? ('本次译了 ' + res.translated + ' 句') : '没有新的句子需要翻译';
+  note('翻译完成：' + extra + '（共 ' + res.done + '/' + res.total + ' 句有译文，目标 ' + res.target + '）', 'ok');
+}
+
 /* ------------------------------ 字幕库 ------------------------------ */
 
 let libraryItems = [];
@@ -1243,7 +1287,11 @@ function collectSegments() {
 
 function plainText({ withTime = false } = {}) {
   return collectSegments()
-    .map((s) => (withTime ? `[${clock(s.startMs || 0)}] ${s.text}` : s.text))
+    .map((s) => {
+      const head = withTime ? '[' + clock(s.startMs || 0) + '] ' : '';
+      // 有译文就两行（原文 + 译文），方便直接粘到笔记里
+      return s.translation ? head + s.text + String.fromCharCode(10) + s.translation : head + s.text;
+    })
     .join('\n');
 }
 
@@ -1294,7 +1342,13 @@ function exportSrt() {
     n += 1;
     lines.push(String(n));
     lines.push(`${srtTime(start)} --> ${srtTime(end)}`);
-    lines.push(seg.text);
+    // 双语：原文一行、译文一行（SRT 支持多行文本，播放器一般两行都显示）
+    if (seg.translation) {
+      lines.push(seg.text);
+      lines.push(seg.translation);
+    } else {
+      lines.push(seg.text);
+    }
     lines.push('');
   });
 
@@ -1352,25 +1406,3 @@ function note(text, kind = '') {
   const hint = el('hint');
   if (hint) hint.textContent = text.length > 70 ? text.slice(0, 70) + '…' : text;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

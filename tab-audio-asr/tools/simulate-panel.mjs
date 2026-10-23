@@ -511,6 +511,36 @@ console.log('\n14) 整段提取期间：不显示「正在聆听」');
   check('不再出现「正在聆听」', !(liveText?.textContent || '').includes('正在聆听'), liveText?.textContent);
 }
 
+
+console.log('\n15) 双语字幕：有译文时每行两行文本');
+{
+  const base = store.get('asrSession');
+  await chromeStub.storage.local.set({
+    asrSession: {
+      ...base,
+      status: 'stopped',
+      videoKey: '',
+      segments: [
+        { index: 0, text: 'おはよう', translation: '早上好', status: 'done', startMs: 0, durationMs: 2000 },
+        { index: 1, text: 'ありがとう', status: 'done', startMs: 2000, durationMs: 2000 }
+      ]
+    }
+  });
+  await sleep(250);
+
+  const body = getPanel().children.find((c) => c.classList.contains('body'));
+  const rows = body.children.filter((c) => c.className && c.className.includes('row'));
+  check('渲染出两行', rows.length === 2, String(rows.length));
+
+  const first = rows[0].children.filter((c) => c.className && c.className.includes('s'));
+  check('第一行有原文和译文两段', first.length === 2, String(first.length));
+  check('译文内容正确', first[1]?.textContent === '早上好', first[1]?.textContent);
+  check('译文带 tr 样式', (first[1]?.className || '').includes('tr'), first[1]?.className);
+
+  const second = rows[1].children.filter((c) => c.className && c.className.includes('s'));
+  check('没有译文的行只有一段', second.length === 1, String(second.length));
+}
+
 }
 console.log('\n11) 源码不变式：滚动目标必须由模式决定');
 {

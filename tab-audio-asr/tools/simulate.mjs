@@ -30,6 +30,7 @@ import { createWavWriter, readAudioFile } from '../lib/audiofile.js';
 import { createSileroVad, createSileroGate } from '../lib/silero.js';
 import { planInterim, stripCommittedOverlap } from '../lib/incremental.js';
 import { buildDoc, getDoc, upsertDoc, listDocs, removeDoc, sanitizeDocs } from '../lib/docstore.js';
+import { TRANSLATE_BATCH, chunkTexts, buildTranslateMessages, parseTranslateReply, applyTranslations, needsTranslation, translationStats } from '../lib/translate.js';
 import { normalizeVideoUrl } from '../lib/videokey.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -505,6 +506,13 @@ const offscreenCtx = vm.createContext({
   stripCommittedOverlap,
   buildDoc,
   normalizeVideoUrl,
+  TRANSLATE_BATCH,
+  chunkTexts,
+  buildTranslateMessages,
+  parseTranslateReply,
+  applyTranslations,
+  needsTranslation,
+  translationStats,
   // 注入时绑定假 OPFS：库代码里的 navigator 会解析到 Node 域的全局对象，
   // 必须由外层把 fakeStorage 闭包传进去
   createWavWriter: (name, rate) => createWavWriter(name, rate, fakeStorage),
@@ -954,6 +962,54 @@ console.log('\n17) 历史稿：重新开始/清空不会把稿子弄丢');
   check('恢复后文稿非空', !!(session?.segments || []).some((s) => s.text), '文本为空');
 }
 
+
+console.log('\n19) 翻译成双语字幕');
+{
+  // 假装 DeepSeek 返回规范的 JSON 数组
+  chatHandler = (messages) => {
+    const user = (messages.find((m) => m.role === 'user') || {}).content || '';
+    const count = user.split('\\n').filter(Boolean).length;
+    return JSON.stringify(Array.from({ length: count }, (_, i) => '译文' + (i + 1)));
+  };
+
+  // 直接给 offscreen 塞一份'已有字幕'的会话（比走 STATE_SET 更贴近真实恢复路径）
+  // RESTORE_STATE 只在 offscreen 没有 state 时才生效：先让它清空，再恢复
+  await bus.send('offscreen', { type: 'CLOSE_OFFSCREEN' });
+  await sleep(5600);
+  await bus.send('offscreen', {
+    type: 'RESTORE_STATE',
+    state: {
+      status: 'stopped',
+      startedAt: Date.now(),
+      segments: [
+        { index: 0, text: 'おはよう', status: 'done', startMs: 0, durationMs: 2000 },
+        { index: 1, text: 'ありがとう', status: 'done', startMs: 2000, durationMs: 2000 }
+      ],
+      transcript: '',
+      diag: {}
+    },
+    settings: { apiKey: 'sk-test', model: 'Qwen/Qwen3-ASR-1.7B', baseUrl: 'https://api.siliconflow.cn/v1', translateBaseUrl: 'https://api.deepseek.com/v1', translateApiKey: 'sk-ds', translateModel: 'deepseek-chat', translateTarget: '中文', segmentSeconds: 20 }
+  });
+  await sleep(200);
+
+  const res = await bus.send('popup', { type: 'TRANSLATE_ALL' });
+  check('翻译返回成功', res?.ok === true, JSON.stringify(res));
+  await sleep(300);
+
+  const session = store.get('asrSession');
+  const segs = session?.segments || [];
+  check('原文没有被翻译覆盖', segs.every((s) => !s.text || !/^译文\d+$/.test(s.text)), segs.map((s) => s.text).join('|').slice(0, 60));
+  check('译文已写入（逐条对应的严格校验在 test-translate.mjs）', segs.filter((s) => s.translation).length >= 1, JSON.stringify(segs.map((s) => s.translation)));
+
+  // 再点一次：全部已译 → 不再请求
+  const before = fetchCalls.filter((c) => String(c.url).includes('chat/completions')).length;
+  const again = await bus.send('popup', { type: 'TRANSLATE_ALL' });
+  await sleep(200);
+  const after = fetchCalls.filter((c) => String(c.url).includes('chat/completions')).length;
+  check('已译过的不重复请求', again?.ok === true && after === before, 'before=' + before + ' after=' + after);
+
+  chatHandler = null;
+}
 console.log('\n18) 取消整段提取（卡住时要有出口）');
 {
   decoderMode = 'speech';
@@ -1002,6 +1058,7 @@ if (failed) {
 }
 console.log('全部通过：消息流、状态落盘、分段上传、停止/清空都正常。');
 process.exit(0);
+
 
 
 

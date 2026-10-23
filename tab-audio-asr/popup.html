@@ -107,6 +107,7 @@
           <button class="btn" id="refineBtn" title="用保存的 WAV 按 20 秒上下文重新识别一遍（准得多，但耗时几分钟）">离线精校</button>
           <button class="btn" id="saveAudioBtn" title="下载这次录到的 WAV 音频">保存音频</button>
           <button class="btn" id="historyBtn" hidden title="把上一份被覆盖或清空的稿子找回来">恢复上一份</button>
+          <button class="btn" id="translateBtn" title="用「设置」里的翻译接口把整份字幕翻成目标语言（双语）">翻译成中文</button>
           <button class="btn ghost" id="resetBtn">清空</button>
         </div>
       </section>
@@ -130,6 +131,15 @@
       </section>
 
       <section class="card">
+        <p class="sectLabel">翻译（双语字幕）</p>
+        <label>接口地址<input id="translateBaseUrl" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1" /></label>
+        <label>API Key（留空则用上面的识别 Key）<input id="translateApiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" /></label>
+        <label>模型名<input id="translateModel" type="text" spellcheck="false" placeholder="deepseek-chat" /></label>
+        <label>目标语言<input id="translateTarget" type="text" spellcheck="false" placeholder="中文" /></label>
+        <p class="mini">识别在硅基流动，翻译可以用 DeepSeek 等任意兼容 /chat/completions 的接口，两套 Key 分开填。</p>
+      </section>
+
+      <section class="card">
         <p class="sectLabel">术语表</p>
         <label>一行一条；<code>错=>对</code> 会本地即时替换，其余作为纠错提示
           <textarea id="glossary" rows="7" spellcheck="false"></textarea>
@@ -145,3 +155,5 @@
     <script type="module" src="popup.js"></script>
   </body>
 </html>
+
+
