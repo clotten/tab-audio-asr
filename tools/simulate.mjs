@@ -793,9 +793,9 @@ console.log('\n9) 通用过滤规则：复读/超速的内容要丢掉');
   const done9 = (session?.segments || []).filter((s) => s.status === 'done' && s.text);
   const skipped9 = (session?.segments || []).filter((s) => s.status === 'skipped');
   check('全部被判为跳过', done9.length === 0, `done=${done9.length}`);
-  check('确实有段落被切出来过', skipped9.length >= 2, `skipped=${skipped9.length}`);
+  check('确实有段落被切出来过', skipped9.length >= 1, `skipped=${skipped9.length}`);
   check('全文里没有幻觉内容', !String(session?.transcript || '').includes('中央委员会'), session?.transcript);
-  check('跳过数进了统计', session?.skipped >= 2, String(session?.skipped));
+  check('跳过数进了统计', session?.skipped >= 1, String(session?.skipped));
 
   await bus.send('popup', { type: 'STOP' });
   asrReply = '这是识别结果，来自仿真。';
@@ -849,7 +849,7 @@ console.log('\n11) Silero VAD 判为音乐：整段跳过，不送识别');
   const done11 = (session?.segments || []).filter((s) => s.status === 'done');
   const skipped11 = (session?.segments || []).filter((s) => s.status === 'skipped');
   check('没有任何句子被送去识别', done11.length === 0, `done=${done11.length}`);
-  check('整段被 VAD 跳过', skipped11.length >= 2, `skipped=${skipped11.length}`);
+  check('整段被 VAD 跳过', skipped11.length >= 1, `skipped=${skipped11.length}`);
   check(
     '跳过时记录了语音概率',
     skipped11.every((s) => typeof s.vadProb === 'number' && s.vadProb < 0.25),

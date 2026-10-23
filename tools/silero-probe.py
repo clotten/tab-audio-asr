@@ -8,8 +8,12 @@ import wave
 import numpy as np
 import onnxruntime as ort
 
-WAV = r"C:\Users\clotten\Desktop\研究\tab-audio-2026-10-19T15-03-28-647Z.wav"
-MODEL = r"C:\Users\clotten\Desktop\研究\_vendor\vadweb\package\dist\silero_vad_v5.onnx"
+# 用法：python tools/silero-probe.py <某个.wav> [模型.onnx]
+# 不给参数时用仓库自带的模型，音频必须自己指定（不写死本机路径）
+import sys, os
+HERE = os.path.dirname(os.path.abspath(__file__))
+WAV = sys.argv[1] if len(sys.argv) > 1 else ""
+MODEL = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "..", "vendor", "silero_vad_v5.onnx")
 
 sess = ort.InferenceSession(MODEL, providers=["CPUExecutionProvider"])
 print("模型输入：")

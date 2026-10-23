@@ -13,7 +13,8 @@
  * 运行：node tools/lint-csp.mjs
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { walkFiles } from './_walk.mjs';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,19 +29,8 @@ function check(name, cond, extra = '') {
   }
 }
 
-/** 递归找 .html（跳过 vendor/，那是第三方） */
-function walk(dir, out = []) {
-  for (const name of readdirSync(dir)) {
-    if (name === 'vendor' || name === 'node_modules' || name.startsWith('.')) continue;
-    const full = join(dir, name);
-    const st = statSync(full);
-    if (st.isDirectory()) walk(full, out);
-    else if (name.endsWith('.html')) out.push(full);
-  }
-  return out;
-}
 
-const pages = walk(root);
+const pages = walkFiles(root, { ext: ['.html'] });
 console.log(`\n1) 扫描 ${pages.length} 个 HTML`);
 check('至少找到一个页面', pages.length > 0, String(pages.length));
 

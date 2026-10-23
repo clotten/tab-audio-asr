@@ -1,8 +1,9 @@
 """生成插件图标（16/32/48/128），深蓝渐变圆角方块 + 白色声波柱。"""
 
-from PIL import Image, ImageDraw
+from PIL import os
+import Image, ImageDraw
 
-OUT = r"C:\Users\clotten\Desktop\研究\tab-audio-asr\icons"
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 SIZE = 512          # 超采样后缩小，边缘更干净
 PAD = 26
 RADIUS = 108

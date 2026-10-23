@@ -15,7 +15,7 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const outDir = join(root, '..', 'dist', 'tab-audio-asr');
+const outDir = join(root, 'dist', 'tab-audio-asr');
 
 /** 要带上的目录（整个复制） */
 const DIRS = ['content', 'lib', 'vendor', 'icons', 'demo', 'examples'];

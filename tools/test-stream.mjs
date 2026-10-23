@@ -8,7 +8,7 @@
  * 运行：node tools/test-stream.mjs
  */
 
-import { createStreamingSegmenter } from '../lib/vad.js';
+import { createStreamingSegmenter, STREAM_DEFAULTS } from '../lib/vad.js';
 
 const SR = 16000;
 let failed = 0;
@@ -39,9 +39,22 @@ function build(parts) {
   return out;
 }
 
+/**
+ * 这组用例测的是"切句机制"，所以固定用低延迟档参数，
+ * 不受出厂默认（高准确：4.5s 合并 / 12s 软切 / 18s 硬切）变化影响。
+ * 出厂默认本身在文件末尾单独断言。
+ */
+const TEST_OPTS = {
+  targetMinMs: 2000,
+  silenceGapMs: 600,
+  graceSilenceMs: 1200,
+  softCutMs: 5000,
+  hardCutMs: 10000
+};
+
 /** 把音频按 blockSize 喂进去，收集切出来的段落与它们的延迟 */
 function run(audio, { blockSize = 1000, options = {}, stopAt = null } = {}) {
-  const seg = createStreamingSegmenter(SR, options);
+  const seg = createStreamingSegmenter(SR, { ...TEST_OPTS, ...options });
   const emitted = [];
   const limit = stopAt == null ? audio.length : Math.min(audio.length, sec(stopAt));
 
@@ -230,6 +243,16 @@ console.log('\n9) 渐进式静音：缓冲长时接受更短的停顿');
   check('开启渐进后切得更早/更多段', on.all.length > off.all.length, `${off.all.length} → ${on.all.length}`);
   check('渐进切出来的原因是 silence', on.all.some((s) => s.reason === 'silence'), on.all.map((s) => s.reason).join(','));
   check('默认阈值下 500ms 停顿不触发切分', off.all.every((s) => s.reason !== 'silence'), off.all.map((s) => s.reason).join(','));
+}
+
+console.log('\n9) 出厂默认是高准确档（漏句比慢几秒更难受）');
+{
+  const seg = createStreamingSegmenter(SR, {});
+  const cfg = seg.config || seg.options || {};
+  const d = cfg.softCutMs != null ? cfg : STREAM_DEFAULTS;
+  check('软切 12s', d.softCutMs === 12000, String(d.softCutMs));
+  check('硬切 18s', d.hardCutMs === 18000, String(d.hardCutMs));
+  check('最短 4.5s', d.targetMinMs === 4500, String(d.targetMinMs));
 }
 
 console.log('');

@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const asSrc = process.argv.includes('--src');
-const root = asSrc ? join(here, '..') : join(here, '..', '..', 'dist', 'tab-audio-asr');
+const root = asSrc ? join(here, '..') : join(here, '..', 'dist', 'tab-audio-asr');
 
 let failed = 0;
 let passed = 0;
