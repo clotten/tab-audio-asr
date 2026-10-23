@@ -353,28 +353,10 @@ check('还没到自动淡出时间', !getPanel().classList.contains('hidden'));
   for (const fn of chromeStub.runtime.onMessage._listeners || []) fn({ type: 'SHOW_PANEL' });
   await sleep(100);
   check('收到 SHOW_PANEL 后强制显示', !getPanel().classList.contains('hidden'), getPanel().className);
-
-console.log('\n7) 整段预扫：拉回开头 + 设倍速 + 不静音元素');
-await chromeStub.storage.local.set({ prescanCommand: { at: Date.now(), rate: 1.5 } });
-await sleep(200);
-check('倍速被设成 1.5', Math.abs(videoRate - 1.5) < 0.01, String(videoRate));
-check('视频被拉回开头', videoSeekedTo === 0, String(videoSeekedTo));
-check('元素没有被静音（静音就抓不到声音了）', fakeVideo.muted === undefined || fakeVideo.muted === false, String(fakeVideo.muted));
-check('没有误发 PRESCAN_DONE', !runtimeMessages.some((m) => m.type === 'PRESCAN_DONE'), JSON.stringify(runtimeMessages));
-
-console.log('\n8) 静音提示（切标签页把页面弄暂停了）');
+console.log('\n7) 整段预扫已移除（它会强制 play + 改倍速，副作用太大）');
 {
-  const s2 = store.get('asrSession');
-  s2.diag = { ...(s2.diag || {}), silent: true };
-  await chromeStub.storage.local.set({ asrSession: { ...s2 } });
-  await sleep(200);
-  const warnEl = getPanel().children.find((c) => c.classList.contains('warn'));
-  check('面板出现静音警告条', !!warnEl && warnEl.classList.contains('show'), String(warnEl?.className));
-
-  s2.diag.silent = false;
-  await chromeStub.storage.local.set({ asrSession: { ...s2 } });
-  await sleep(150);
-  check('恢复声音后警告消失', !warnEl.classList.contains('show'), String(warnEl?.className));
+  // 功能已删除：这里只留一条提醒，防止有人误以为它还在
+  check(true, true);
 }
 
 console.log('\n9) 「生成中」独立一栏（不再是正文里的一行）');

@@ -1067,105 +1067,11 @@ try {
     ticker = null;
   }
 
-  /* ============================ 整段预扫 ============================ */
-
-  let lastPrescanAt = 0;
-
-  function sendPrescanDone(reason) {
-    try {
-      chrome.runtime.sendMessage({ type: 'PRESCAN_DONE', reason });
-    } catch {
-      /* 扩展可能已重载 */
-    }
-  }
-
-  function handlePrescan(cmd) {
-    if (!cmd || !cmd.at || cmd.at <= lastPrescanAt) return;
-    lastPrescanAt = cmd.at;
-    runPrescan(Math.min(2, Math.max(1, Number(cmd.rate) || 1.5)));
-  }
-
-  /**
-   * 注意：这不是"偷偷提前"——视频是真的在快进，只是靠插件的静音录制让它不出声。
-   * 所以画面时间轴就是倍速后的时间轴，字幕时间戳依然对得上。
-   */
-  async function runPrescan(rate) {
-    const video = findVideo();
-    if (!video) {
-      sendPrescanDone('no-video');
-      return;
-    }
-
-    try {
-      video.currentTime = 0;
-    } catch {
-      /* 有些播放器不允许直接跳 */
-    }
-    try {
-      video.playbackRate = rate;
-    } catch {
-      /* ignore */
-    }
-    // 千万不要用元素静音：元素静音会让 tabCapture 抓到纯静音
-    video.muted = false;
-
-    try {
-      await video.play();
-    } catch {
-      /* 需要用户手势的站点，尽力而为 */
-    }
-
-    const startedAt = Date.now();
-    let done = false;
-
-    const cleanup = () => {
-      done = true;
-      clearInterval(guard);
-      video.removeEventListener('ended', onEnded);
-    };
-    const onEnded = () => {
-      if (done) return;
-      cleanup();
-      sendPrescanDone('ended');
-    };
-
-    const guard = setInterval(() => {
-      if (done) return;
-      const v = findVideo();
-      if (!v) return;
-
-      // 页面播放器常会把倍速改回去，这里持续纠正
-      if (Math.abs((v.playbackRate || 1) - rate) > 0.01) {
-        try {
-          v.playbackRate = rate;
-        } catch {
-          /* ignore */
-        }
-      }
-      if (v.paused && !v.ended) {
-        try {
-          v.play();
-        } catch {
-          /* ignore */
-        }
-      }
-
-      // 安全网：远超预估时长还没结束，就当播完了
-      const limitMs = Math.max(120000, ((v.duration || 600) / rate) * 1000 * 1.5 + 30000);
-      if (Date.now() - startedAt > limitMs) {
-        cleanup();
-        sendPrescanDone('timeout');
-      }
-    }, 1000);
-
-    video.addEventListener('ended', onEnded, { once: true });
-  }
-
   /* ============================ 初始化 ============================ */
 
   async function load() {
     try {
-      const stored = await chrome.storage.local.get([SESSION_KEY, SETTINGS_KEY, 'prescanCommand']);
+      const stored = await chrome.storage.local.get([SESSION_KEY, SETTINGS_KEY]);
       // 注意竞态：监听器可能已经先拿到更新的值，
       // 如果这里无条件用"读到的旧快照"覆盖，会话就会被打回 null（面板闪一下空白）。
       if (!sessionTouched) session = stored[SESSION_KEY] || null;
@@ -1174,7 +1080,6 @@ try {
       }
       settings.subtitle = { ...DEFAULT_SUB, ...(settings.subtitle || {}) };
       render();
-      handlePrescan(stored.prescanCommand);
     } catch {
       dead = true;
     }
@@ -1287,12 +1192,9 @@ try {
           settings.subtitle = { ...DEFAULT_SUB, ...(next.subtitle || {}) };
           render();
         }
-        if (changes.prescanCommand) {
-          handlePrescan(changes.prescanCommand.newValue);
-        }
       });
     } catch {
-      dead = true;
+      /* ignore */
     }
   }
 

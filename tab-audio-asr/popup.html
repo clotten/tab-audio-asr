@@ -50,8 +50,6 @@
         <div class="meta" id="progress">尚未开始</div>
         <div class="rowActions">
           <button class="btn" id="showLivePanelBtn" title="把实时转录的字幕显示到视频页">显示字幕</button>
-          <button class="btn" id="prescanBtn" title="让视频静音从头快进播一遍，专门生成整段字幕">整段预扫</button>
-          <span class="mini" id="prescanHint"></span>
         </div>
         <label class="check">
           <input type="checkbox" id="mutePlayback" />
@@ -71,7 +69,6 @@
         </label>
         <label class="inline">悬浮字幕字号<input id="subtitleFontSize" type="number" min="12" max="48" step="2" /></label>
         <label>每段秒数（仅回退通路生效；实时通路自动切句）<input id="segmentSeconds" type="number" min="10" max="600" step="5" /></label>
-        <label>预扫倍速（1–2 之间最稳，实测 1.5 倍准确率最好）<input id="prescanRate" type="number" min="1" max="2" step="0.1" /></label>
         <p class="note" id="liveNote"></p>
       </section>
     </section>

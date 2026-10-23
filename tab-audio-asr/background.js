@@ -765,13 +765,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
 
-        case 'PRESCAN_DONE': {
-          // 预扫期间视频播完了：停掉录制，清掉指令
-          await chrome.storage.local.remove('prescanCommand');
-          const res = await stopCapture();
-          sendResponse(res);
-          break;
-        }
         case 'PING':
           sendResponse({ ok: true });
           break;

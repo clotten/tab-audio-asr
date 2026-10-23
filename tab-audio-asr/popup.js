@@ -23,7 +23,7 @@ const DEFAULTS = {
   translateModel: 'deepseek-chat',
   translateTarget: '中文',
   glossary: '',
-  prescanRate: 1.5,
+
   subtitle: { enabled: true, fontSize: 15 }
 };
 
@@ -122,7 +122,6 @@ function bindEvents() {
   el('showLivePanelBtn').addEventListener('click', showPanel);
   el('refineBtn').addEventListener('click', refineAll);
   el('saveAudioBtn').addEventListener('click', saveRecording);
-  el('prescanBtn').addEventListener('click', startPrescan);
   el('demoBtn').addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('demo/test-page.html') });
   });
@@ -135,7 +134,6 @@ function bindEvents() {
   el('incrementalAsr').addEventListener('change', () => saveSettings(readForm()));
   el('glossary').addEventListener('change', () => saveSettings(readForm()));
   el('correctModel').addEventListener('change', () => saveSettings(readForm()));
-  el('prescanRate').addEventListener('change', () => saveSettings(readForm()));
 }
 
 /* 「校正全文」按钮已移除（用户只需要「整段提取」自动带的纠错和「离线精校」）；
@@ -211,55 +209,6 @@ async function saveRecording() {
   }
 }
 
-/* ------------------------------ 整段预扫 ------------------------------ */
-
-/**
- * 预扫：让视频从 0 开始按倍速静音播放一遍，专门生成整段字幕。
- * 注意这不是"偷偷提前"——视频是真的在快进，只是不放声音。
- */
-async function startPrescan() {
-  setNoteSink('live');
-  const next = readForm();
-  if (!next.apiKey) {
-    showTab('cfg');
-    return note('请先填写 API Key。', 'err');
-  }
-  if (!activeTab?.id) return note('没有拿到当前标签页。', 'err');
-
-  const settingsForPrescan = { ...next, mutePlayback: true };
-  await saveSettings(settingsForPrescan);
-
-  busy = true;
-  el('toggleBtn').disabled = true;
-  el('prescanHint').textContent = '启动中…';
-
-  let res;
-  try {
-    res = await chrome.runtime.sendMessage({
-      type: 'START',
-      tabId: activeTab.id,
-      settings: settingsForPrescan
-    });
-  } catch (err) {
-    res = { ok: false, error: String(err?.message || err) };
-  }
-
-  busy = false;
-  el('toggleBtn').disabled = false;
-
-  if (!res?.ok) {
-    el('prescanHint').textContent = '';
-    return note(res?.error || '预扫启动失败', 'err');
-  }
-
-  // 交给页面里的脚本：拉回开头 + 设倍速 + 播放
-  await chrome.storage.local.set({
-    prescanCommand: { at: Date.now(), rate: settingsForPrescan.prescanRate }
-  });
-
-  el('prescanHint').textContent = `已按 ${settingsForPrescan.prescanRate}x 静音预扫`;
-  note('预扫已开始：视频会自动跳回开头并静音快进，播完自动停止。', 'ok');
-}
 
 /* ------------------------------ 当前标签页 ------------------------------ */
 
@@ -632,7 +581,7 @@ function fillForm() {
   el('model').value = settings.model || DEFAULTS.model;
   el('baseUrl').value = settings.baseUrl || DEFAULTS.baseUrl;
   el('segmentSeconds').value = settings.segmentSeconds || DEFAULTS.segmentSeconds;
-  el('prescanRate').value = settings.prescanRate || DEFAULTS.prescanRate;
+
   el('correctModel').value = settings.correctModel || DEFAULTS.correctModel;
   el('translateBaseUrl').value = settings.translateBaseUrl || DEFAULTS.translateBaseUrl;
   el('translateApiKey').value = settings.translateApiKey || '';
@@ -654,7 +603,6 @@ function fillForm() {
 function readForm() {
   const seg = Number(el('segmentSeconds').value) || DEFAULTS.segmentSeconds;
   const fontSize = Number(el('subtitleFontSize').value) || DEFAULTS.subtitle.fontSize;
-  const rate = Number(el('prescanRate').value) || DEFAULTS.prescanRate;
   return {
     apiKey: el('apiKey').value.trim(),
     model: el('model').value.trim() || DEFAULTS.model,
@@ -671,7 +619,7 @@ function readForm() {
     translateModel: el('translateModel').value.trim() || DEFAULTS.translateModel,
     translateTarget: el('translateTarget').value.trim() || DEFAULTS.translateTarget,
     glossary: el('glossary').value,
-    prescanRate: Math.min(2, Math.max(1, Number(rate.toFixed(1)))),
+
     subtitle: {
       ...(settings.subtitle || {}),
       // 开关不放在设置页：点「显示字幕」置真，面板右上角 × 置假
