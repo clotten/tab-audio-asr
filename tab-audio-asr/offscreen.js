@@ -28,7 +28,7 @@ import {
   needsTranslation,
   translationStats
 } from './lib/translate.js';
-import { looksTruncated, informationUnits, splitInHalf } from './lib/coverage.js';
+import { shouldRetrySplit, informationUnits, splitInHalf } from './lib/coverage.js';
 import { detectSpeechRegions, createStreamingSegmenter } from './lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -1312,7 +1312,8 @@ async function transcribeWindowed(samples, { maxRegionMs = 12000, onProgress, sh
 
         // 密度体检：长段却几乎没字 → 云端大概率截断了（语速快的视频常见）。
         // 切两半重试，信息量明显更大才替换；有次数预算，避免一路翻倍烧钱。
-        if (one.text && retryBudget > 0 && looksTruncated(one.text, region.durationMs)) {
+        const why = one.text && retryBudget > 0 ? shouldRetrySplit(one.text, region.durationMs) : '';
+        if (why) {
           const halves = splitInHalf(region.startSample, region.endSample);
           if (halves) {
             retryBudget -= 1;
@@ -1325,7 +1326,10 @@ async function transcribeWindowed(samples, { maxRegionMs = 12000, onProgress, sh
             const gained = two.reduce((n, t) => n + informationUnits(t.text), 0);
             if (gained > informationUnits(one.text) * 1.25) {
               parts = two;
-              if (state?.diag) state.diag.splitRetries = (state.diag.splitRetries || 0) + 1;
+              if (state?.diag) {
+                state.diag.splitRetries = (state.diag.splitRetries || 0) + 1;
+                state.diag.lastSplitReason = why;
+              }
             }
           }
         }
@@ -1518,6 +1522,7 @@ async function runIngest(url, myToken) {
     /* --- 3. 整段转写 --- */
     const items = await transcribeWindowed(samples, {
       shouldStop: () => myToken !== ingestToken,
+      retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
       onProgress: async (count) => {
         state.diag.ingestDone = count;
         await saveState();
@@ -1601,6 +1606,7 @@ async function handleRefine() {
   await saveState();
 
   const refined = await transcribeWindowed(samples, {
+    retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
     onProgress: async (count) => {
       state.diag.refineDone = count;
       await saveState();

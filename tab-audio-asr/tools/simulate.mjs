@@ -350,7 +350,23 @@ const fakeDocument = {
 
 let fetchCalls = [];
 let chatHandler = null; // (messages) => string，用来模拟对话模型
-let asrReply = '这是识别结果，来自仿真。'; // 识别接口的返回文本
+let asrReply = '这是识别结果，来自仿真。'; // 固定文本；设为 null 则按音频时长自动生成
+let autoSeq = 1;
+const autoReply = (seconds) => {
+  // 生成"密度合理且不复读"的文本：
+  //  - 密度：中文 ~4 字/秒，过得了 lib/coverage.js 的体检；
+  //  - 不复读：用伪随机从字库里取字，避免触发 lib/hallucination.js 的复读检测
+  //    （用固定词表拼接会在长段里重复 3 次以上，被判成模型故障）。
+  const need = Math.max(8, Math.round(seconds * 4));
+  const pool = "这是一段仿真语音经过分段送入识别接口之后返回的文本来验证重试逻辑是否可靠工作并且不触发复读检测规则";
+  let seed = (autoSeq++ * 7919) % 2147483647;
+  let out = "";
+  for (let i = 0; i < need; i++) {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    out += pool[Math.floor(seed / 65536) % pool.length];
+  }
+  return out + "。";
+};
 let asrDelayMs = 0; // 识别响应延迟，用来测「取消整段提取」
 let musicMode = false; // 模拟"这一整段都是音乐"：Silero 概率接近 0
 let ortInitDelayMs = 0; // 模拟 wasm 首次编译很慢
@@ -431,7 +447,14 @@ async function fakeFetch(url, init) {
     ok: true,
     status: 200,
     headers: { get: () => 'trace-sim' },
-    text: async () => JSON.stringify({ text: asrReply })
+    text: async () => {
+      let seconds = 10;
+      try {
+        const f = init && init.body && init.body.get ? init.body.get("file") : null;
+        if (f && f.size) seconds = Math.max(1, (f.size - 44) / 32000); // 16k 单声道 16bit
+      } catch {}
+      return JSON.stringify({ text: asrReply != null ? asrReply : autoReply(seconds) });
+    }
   };
 }
 
@@ -548,6 +571,9 @@ vm.runInContext(backgroundSource, swCtx, { filename: 'background.js' });
 /* ============================ 开始演练 ============================ */
 
 const SETTINGS = {
+  // 仿真里关闭切半重试：假音频没有真实密度，开着会把请求数断言打乱。
+  // 密度判定本身由 tools/test-coverage.mjs 单测覆盖。
+  splitRetryBudget: 0,
   apiKey: 'sk-sim',
   model: 'Qwen/Qwen3-ASR-1.7B',
   baseUrl: 'https://api.siliconflow.cn/v1',

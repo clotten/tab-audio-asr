@@ -15,8 +15,11 @@
 /** 少于这个时长不做判断（太短的段本来就几个字） */
 const MIN_MS_TO_JUDGE = 8000;
 
-/** 语速下限：每秒至少要这么多个"字"（CJK 按字算，拉丁按词算） */
-const MIN_CHARS_PER_SEC = 1.2;
+/** 语速下限：中文每秒至少这么多字 */
+const MIN_CJK_PER_SEC = 1.5;
+
+/** 语速下限：英文每秒至少这么多词（慢速念白可以低到 1 词/秒） */
+const MIN_LATIN_PER_SEC = 0.8;
 
 /** 统计"信息量"：CJK 每个字算 1，连续的拉丁字母/数字算 1 个词 */
 export function informationUnits(text) {
@@ -34,9 +37,44 @@ export function informationUnits(text) {
 export function looksTruncated(text, durationMs) {
   const ms = Number(durationMs) || 0;
   if (ms < MIN_MS_TO_JUDGE) return false;
-  const units = informationUnits(text);
+
+  const s = String(text || "");
+  const cjk = (s.match(/[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+  const latin = (s.match(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*/g) || []).length;
+  const units = informationUnits(s);
   const perSec = units / (ms / 1000);
-  return perSec < MIN_CHARS_PER_SEC;
+
+  // 中英文的语速不是一个量级：中文 3~6 字/秒，英文 1.5~2.5 词/秒，
+  // 而且英文的慢速深情念白能到 1 词/秒左右。用同一个阈值会误判（踩过）。
+  const minPerSec = cjk >= latin ? MIN_CJK_PER_SEC : MIN_LATIN_PER_SEC;
+  return perSec < minPerSec;
+}
+
+/**
+ * 句尾悬空：说明这一段被切断在句子中间。
+ * 实测这是"云端截断"最可靠的信号——被截的段落常以 and / I / the / to 结尾，
+ * 或者根本没有句末标点。比密度判定灵敏（英文被切一半后密度仍然"正常"）。
+ */
+const DANGLING_TAIL = /(?:\b(?:and|or|but|the|a|an|to|of|in|on|at|for|with|that|which|i|you|he|she|it|we|they|is|was|are|were|my|your|his|her|so|because|if|when)\s*)$/i;
+
+export function endsMidSentence(text) {
+  const s = String(text || "").trim();
+  if (!s) return false;
+  // 有句末标点收尾 → 视为完整
+  if (/[.!?。！？…"'”’)\]]$/.test(s)) {
+    // 但 "..., I." 这种两个字母的残句仍算可疑
+    const tail = s.replace(/[.!?。！？…"'”’)\]]+$/, "");
+    const lastWord = (tail.match(/([A-Za-z']+|[\u4e00-\u9fff]+)\s*$/) || [])[1] || "";
+    return tail.length > 0 && lastWord.length <= 1;
+  }
+  return true;
+}
+
+/** 综合判定：密度过低 或 句子没说完 */
+export function shouldRetrySplit(text, durationMs) {
+  if (looksTruncated(text, durationMs)) return "low-density";
+  if (endsMidSentence(text) && (Number(durationMs) || 0) >= 6000) return "dangling-tail";
+  return "";
 }
 
 /**
