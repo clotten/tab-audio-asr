@@ -1,10 +1,13 @@
-# 密钥与个人数据（绝不提交）
+# 密钥与私人数据（绝不提交）
 .siliconflow-key
 *.key
 .env
 .env.*
 
-# ── 与扩展无关的私人内容（留在本地，不进仓库）────────────────
+# 扩展有独立 git 仓库（用于发布），外层不重复跟踪
+tab-audio-asr/
+
+# 与扩展无关的私人内容（留在本地）
 音频数据/
 tts_out/
 workbuddy/
@@ -14,25 +17,24 @@ dsh-plugin-conversation-archive*/
 *.mp4
 *.wav
 语音条*.html
+语音识别_*.md
 asr_result.json
 make_voice_html.py
 tts_sf.py
-语音识别_*.md
 *.zip
 
-# ── 构建产物 ────────────────────────────────────────────────
+# git 历史备份（体积大且含旧历史）
+.git-backup/
 dist/
-tools/out/
-tools/tone.wav
 
-# ── 依赖 ────────────────────────────────────────────────────
+# 依赖与产物
 _node/
 node_modules/
 .venv/
 __pycache__/
 pip-*/
 
-# ── 编辑器与系统 ────────────────────────────────────────────
+# 编辑器与系统
 .vscode/
 .idea/
 .DS_Store
