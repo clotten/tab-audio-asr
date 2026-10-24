@@ -46,7 +46,7 @@ function walk(dir, out = []) {
 
 console.log(`\n冒烟测试：${asSrc ? '源码目录' : 'dist 交付物'} → ${root}`);
 if (!existsSync(root)) {
-  console.log(`  FAIL  目录不存在（先跑 node tools/build-dist.mjs）`);
+  console.log(`  FAIL  目录不存在：先跑 node tools/build-dist.mjs（默认检查 dist/，加 --src 检查源码目录）`);
   process.exit(1);
 }
 
