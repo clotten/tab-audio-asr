@@ -1,0 +1,41 @@
+# 密钥与个人数据（绝不提交）
+.siliconflow-key
+*.key
+.env
+.env.*
+
+# ── 与扩展无关的私人内容（留在本地，不进仓库）────────────────
+音频数据/
+tts_out/
+workbuddy/
+LiveTranslate-main/
+dsh-plugin-conversation-archive*/
+*.mp3
+*.mp4
+*.wav
+语音条*.html
+asr_result.json
+make_voice_html.py
+tts_sf.py
+语音识别_*.md
+*.zip
+
+# ── 构建产物 ────────────────────────────────────────────────
+dist/
+tools/out/
+tools/tone.wav
+
+# ── 依赖 ────────────────────────────────────────────────────
+_node/
+node_modules/
+.venv/
+__pycache__/
+pip-*/
+
+# ── 编辑器与系统 ────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tmp
+*~
