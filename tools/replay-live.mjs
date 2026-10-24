@@ -9,7 +9,7 @@
  *
  * 用法：
  *   node tools/replay-live.mjs <音频.wav> [--speed 1] [--no-silero] [--no-interim] [--out 前缀]
- *   （需要先在 _node/ 里装 onnxruntime-node；没有就自动退化成纯能量 VAD）
+ *   （需要先在 99-依赖与归档/_node 里装 onnxruntime-node；没有就自动退化成纯能量 VAD）
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -93,7 +93,7 @@ console.log(`  Silero: ${useSilero ? '真模型' : '关闭'} ｜ 增量预览: $
 let vad = null;
 if (useSilero) {
   const depDirs = [
-    join(ROOT, '..', '_node', 'node_modules', 'onnxruntime-node'),
+    join(ROOT, '..', '99-依赖与归档', '_node', 'node_modules', 'onnxruntime-node'),
     join(ROOT, '..', 'node_modules', 'onnxruntime-node')
   ];
   const found = depDirs.find((p) => existsSync(join(p, 'package.json')));

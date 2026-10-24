@@ -20,11 +20,17 @@ export const SKIP_DIRS = new Set([
   '__pycache__',
   'vendor', // 第三方 wasm/onnx，格式不是我们控制
   'dist', // 打包产物：由 smoke.mjs 专门检查
+  // 研究目录里按主题分的私人文件夹（不在本仓库内，防误扫）
   'workbuddy',
   'tts_out',
   '音频数据',
   'LiveTranslate-main',
-  'dsh-plugin-conversation-archive'
+  'dsh-plugin-conversation-archive',
+  '03-workbuddy',
+  '02-语音条TTS',
+  '04-对话归档插件',
+  '90-参考资料',
+  '99-依赖与归档'
 ]);
 
 /** 递归列出文件；dir 默认仓库根 */
