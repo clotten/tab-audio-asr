@@ -209,6 +209,8 @@ label.check input[type="checkbox"] {
 .transcript .seg { padding: 4px 0 4px 8px; border-left: 2px solid rgba(59,130,246,.5); margin-bottom: 6px; }
 .transcript .seg.err { border-left-color: rgba(229,72,77,.6); color: #ffb3b5; }
 .transcript .seg.pending { border-left-color: rgba(139,152,169,.5); color: var(--muted); }
+/* 译文行：和浮窗里的样式保持一致（淡一点、和原文分开） */
+.transcript .seg-tr { margin-top: 2px; color: #9fb3c8; font-size: 12px; line-height: 1.5; }
 .transcript .t {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 10.5px;

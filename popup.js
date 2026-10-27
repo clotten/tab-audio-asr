@@ -465,6 +465,14 @@ function renderTranscript() {
         t.textContent = clock(seg.startMs || 0);
         div.appendChild(t);
         div.appendChild(document.createTextNode(seg.text));
+
+        // 有译文就另起一行显示（浮窗里有，弹窗里之前漏了）
+        if (seg.translation) {
+          const tr = document.createElement('div');
+          tr.className = 'seg-tr';
+          tr.textContent = seg.translation;
+          div.appendChild(tr);
+        }
       }
     } else {
       div.classList.add('pending');
@@ -839,6 +847,10 @@ async function translateAll() {
 
   if (!res?.ok) return note(`翻译失败：${res?.error || '未知错误'}`, 'err');
   const extra = res.translated ? ('本次译了 ' + res.translated + ' 句') : '没有新的句子需要翻译';
+  // 有没译成功的句子要说清楚，否则看起来像"翻译成功但没显示"
+  if (res.failed) {
+    return note(`${extra}，${res.failed} 句没译成功——再点一次「翻译成中文」只会补这些`, 'err');
+  }
   note('翻译完成：' + extra + '（共 ' + res.done + '/' + res.total + ' 句有译文，目标 ' + res.target + '）', 'ok');
 }
 

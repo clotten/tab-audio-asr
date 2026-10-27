@@ -1193,18 +1193,35 @@ async function handleTranslateAll() {
 
   let translated = 0;
   try {
+    const failed = [];
     for (const batch of chunkTexts(todo, TRANSLATE_BATCH)) {
       if (!state?.diag?.translating) break; // 被取消
 
-      const messages = buildTranslateMessages(
-        batch.map((s) => s.text),
-        { target }
-      );
-      const reply = await callTranslateApi(messages);
-      const parsed = parseTranslateReply(reply, batch.length);
+      const askBatch = async (list) => {
+        const messages = buildTranslateMessages(list.map((s) => s.text), { target });
+        const reply = await callTranslateApi(messages);
+        return parseTranslateReply(reply, list.length);
+      };
+
+      let parsed = await askBatch(batch);
+
+      // 行数对不上（模型合并/拆分了行）→ 拆成两半各试一次，别整批丢
+      if (!parsed && batch.length > 1) {
+        const mid = Math.ceil(batch.length / 2);
+        const first = await askBatch(batch.slice(0, mid));
+        const second = await askBatch(batch.slice(mid));
+        if (first && second) {
+          parsed = [...first, ...second];
+          if (state) state.diag.splitTranslateRetries = (state.diag.splitTranslateRetries || 0) + 1;
+        }
+      }
+
       if (!parsed) {
-        // 一批错位就整批丢，绝不按位置硬塞
-        state.diag.translateError = '模型返回的行数与原文不一致（已跳过这一批）';
+        // 拆半仍不行：记下这些句子，绝不按位置硬塞（错位比没译更糟）
+        failed.push(...batch);
+        if (state) {
+          state.diag.translateError = '有 ' + batch.length + ' 句的译文行数对不上，已跳过（再点一次会补译）';
+        }
         continue;
       }
 
@@ -1217,7 +1234,14 @@ async function handleTranslateAll() {
     }
 
     const stats = translationStats(state.segments);
-    return { ok: true, translated, ...stats, target, model: settings.translateModel || DEFAULTS.translateModel };
+    return {
+      ok: true,
+      translated,
+      ...stats,
+      failed: failed.length,
+      target,
+      model: settings.translateModel || DEFAULTS.translateModel
+    };
   } catch (err) {
     if (state) state.diag.translateError = String(err?.message || err);
     return { ok: false, error: String(err?.message || err), translated };

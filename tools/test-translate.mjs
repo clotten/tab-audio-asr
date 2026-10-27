@@ -104,6 +104,30 @@ console.log('\n5) 统计与跳过');
   check('待译 1', stats.pending === 1, String(stats.pending));
 }
 
+console.log('\nN) 整批解析失败时可以拆半重试（真机上第一批 20 句曾整批丢）');
+{
+  const texts = Array.from({ length: 20 }, (_, i) => `sentence number ${i + 1} about coding`);
+
+  // 模型把 20 行合并成 12 行 → 整批解析必失败
+  const merged = JSON.stringify(texts.slice(0, 12).map((_, i) => `第 ${i + 1} 句译文`));
+  check('整批：行数不符 → 解析返回 null', parseTranslateReply(merged, 20) === null);
+
+  // 拆成两半，每半各行数正确 → 都能解析，拼起来仍是 20 句且顺序对齐
+  const half1 = texts.slice(0, 10);
+  const half2 = texts.slice(10);
+  const r1 = parseTranslateReply(JSON.stringify(half1.map((_, i) => `前半 ${i + 1}`)), half1.length);
+  const r2 = parseTranslateReply(JSON.stringify(half2.map((_, i) => `后半 ${i + 1}`)), half2.length);
+  check('拆半：前半解析成功', Array.isArray(r1) && r1.length === 10);
+  check('拆半：后半解析成功', Array.isArray(r2) && r2.length === 10);
+  const joined = [...(r1 || []), ...(r2 || [])];
+  check('拆半：拼起来还是 20 句', joined.length === 20);
+  check('拆半：顺序没有错位', joined[0] === '前半 1' && joined[10] === '后半 1' && joined[19] === '后半 10');
+
+  // 错位的批次绝不按位置硬塞：解析失败就只能是 null
+  const wrongOrder = JSON.stringify(['只有一行']);
+  check('行数不足也是 null（不硬塞）', parseTranslateReply(wrongOrder, 5) === null);
+}
+
 console.log('');
 if (failed) {
   console.log(`${failed} 项失败`);
