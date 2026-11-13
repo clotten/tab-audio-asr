@@ -18,6 +18,7 @@ import vm from 'node:vm';
 // 把真实的编解码 / VAD 注入 vm 上下文，这样仿真跑的是真代码而不是桩
 import { encodeWav, mixToMono, mixToMonoInPlace, resampleBox, TARGET_SAMPLE_RATE } from '../lib/wav.js';
 import { coveredRanges, isCovered, coveredSeconds, mergeTimeline } from '../lib/ranges.js';
+import { planFragments } from '../lib/fmp4.js';
 import { detectSpeechRegions, createStreamingSegmenter } from '../lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -522,6 +523,7 @@ const offscreenCtx = vm.createContext({
   mixToMono,
   mixToMonoInPlace,
   coveredRanges,
+  planFragments,
   isCovered,
   coveredSeconds,
   mergeTimeline,

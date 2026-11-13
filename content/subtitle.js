@@ -17,10 +17,10 @@
 
 // 版本戳：控制台一眼看出页面里跑的是哪一版内容脚本（排查"改了没生效"）
 try {
-  console.log('[字幕助手·页面] 内容脚本已加载 v2026-10-21c');
+  console.log('[字幕助手·页面] 内容脚本已加载 v2026-11-13a');
   // 同时写进 DOM：自动化/远程排查时不用开控制台就能确认页面跑的是哪一版
   try {
-    document.documentElement.dataset.dshAsrVersion = '2026-10-21c';
+    document.documentElement.dataset.dshAsrVersion = '2026-11-13a';
   } catch {}
 } catch {}
 
@@ -830,11 +830,26 @@ try {
       area.classList.add('show');
       return;
     }
-    // 整段提取期间（status = processing）不该说"正在聆听"——那是录音的说法
+    // 整段提取失败：把原因显示出来。以前只写进 diag，页面上什么都不显示，
+    // 用户只看到"提取中"然后没反应（真机踩过）。
+    if (session?.diag?.ingestPhase === 'error' && session.diag.ingestError) {
+      parts.liveText.textContent = `整段提取失败：${session.diag.ingestError}`;
+      area.classList.add('show');
+      return;
+    }
+
+    // 整段提取期间（status = processing）不该说正在聆听——那是录音的说法
     if (session?.status === 'processing') {
       const done = session.diag?.ingestDone || 0;
       const phase = { download: '下载中', decode: '解码中', transcribe: '转写中' }[session.diag?.ingestPhase] || '处理中';
-      parts.liveText.textContent = `整段提取：${phase}${done ? `（已转写 ${done} 段）` : ''}`;
+      const fragMode = session.diag?.ingestMode === 'fmp4';
+      const total = session.diag?.ingestFragments || 0;
+      const progress = done
+        ? fragMode && total
+          ? `（第 ${done}/${total} 片）`
+          : `（已转写 ${done} 段）`
+        : '';
+      parts.liveText.textContent = `整段提取：${phase}${progress}`;
       area.classList.add('show');
       return;
     }

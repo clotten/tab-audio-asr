@@ -14,6 +14,7 @@
 
 import { encodeWav, mixToMono, mixToMonoInPlace, resampleBox, TARGET_SAMPLE_RATE } from './lib/wav.js';
 import { coveredRanges, isCovered, coveredSeconds, mergeTimeline } from './lib/ranges.js';
+import { planFragments } from './lib/fmp4.js';
 import { createWavWriter, readAudioFile } from './lib/audiofile.js';
 import { looksLikeHallucination } from './lib/hallucination.js';
 import { createSileroVad, createSileroGate } from './lib/silero.js';
@@ -1327,107 +1328,172 @@ function wavToSamples(arrayBuffer) {
  * 把一段完整的 16k 单声道 PCM 按窗口切句后逐段转写。
  * 「离线精校」和「整段提取」共用这一条路——两者的差别只在音频从哪来。
  */
-async function transcribeWindowed(
-  samples,
-  { maxRegionMs = 12000, onProgress, shouldStop, retryBudget = 24, prior = [] } = {}
-) {
-  const total = samples.length;
-  const winSamples = REFINE_WINDOW_SEC * TARGET_RATE;
-  const out = [];
+/**
+ * 转写一块（≤3 分钟）音频：切句 → 逐段识别 → 密度体检 → 必要时切半重试。
+ *
+ * 抽出来是因为现在有两条路要共用它：
+ *   1. 一段完整的 PCM（整段解码 / 离线精校）；
+ *   2. 分片 MP4 边解边送进来（下面 transcribeStreaming）。
+ * ctx 里带着跨块共享的状态：已完成的句子、续跑区间、切半重试预算。
+ */
+async function transcribeBlock(block, offsetMs, ctx) {
+  const { maxRegionMs, retry, shouldStop, out, onProgress, done, prior } = ctx;
+  const regions = detectSpeechRegions(block, TARGET_RATE, {
+    maxRegionMs,
+    targetMinMs: 3000,
+    minGapMs: 700,
+    maxJoinGapMs: 2500
+  });
 
-  // 断点续跑：之前已经转好的时间段直接跳过（不重复花钱）
-  const done = coveredRanges(prior);
-  let skippedByResume = 0;
+  const runOne = async (seg) => {
+    const slice = block.subarray(seg.startSample, seg.endSample);
+    const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
+    const raw = await callTranscribe(wav, out.length);
+    return { text: acceptText(raw, seg.durationMs), raw, bytes: wav.size };
+  };
 
-  for (let start = 0; start < total; start += winSamples) {
-    const end = Math.min(total, start + winSamples);
-    const window = samples.subarray(start, end);
+  for (const region of regions) {
+    if (shouldStop && shouldStop()) return; // 用户取消：保留已完成的段
+    const absStartMs = offsetMs + region.startMs;
 
-    // 每个窗口内再按能量切句：窗口 3 分钟是为了不让单次切句的内存无限涨
-    const regions = detectSpeechRegions(window, TARGET_RATE, {
-      maxRegionMs,
-      targetMinMs: 3000,
-      minGapMs: 700,
-      maxJoinGapMs: 2500
-    });
+    // 这一段上次已经转过了（断点续跑）
+    if (done.length && isCovered(done, absStartMs, region.durationMs)) {
+      ctx.skipped += 1;
+      continue;
+    }
 
-    // 把一段采样送去识别（返回 { text, raw, bytes }）
-    const runOne = async (seg) => {
-      const slice = window.subarray(seg.startSample, seg.endSample);
-      const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
-      const raw = await callTranscribe(wav, out.length);
-      return { text: acceptText(raw, seg.durationMs), raw, bytes: wav.size };
-    };
+    let parts;
+    try {
+      const one = await runOne(region);
+      parts = [{ ...one, offsetMs: 0, durationMs: region.durationMs }];
 
-    for (const region of regions) {
-      if (shouldStop && shouldStop()) return out; // 用户取消：保留已完成的段
-      const absStartMs = Math.round((start / TARGET_RATE) * 1000) + region.startMs;
-
-      // 这一段上次已经转过了
-      if (done.length && isCovered(done, absStartMs, region.durationMs)) {
-        skippedByResume += 1;
-        continue;
-      }
-
-      let parts;
-      try {
-        const one = await runOne(region);
-        parts = [{ ...one, offsetMs: 0, durationMs: region.durationMs }];
-
-        // 密度体检：长段却几乎没字 → 云端大概率截断了（语速快的视频常见）。
-        // 切两半重试，信息量明显更大才替换；有次数预算，避免一路翻倍烧钱。
-        const why = one.text && retryBudget > 0 ? shouldRetrySplit(one.text, region.durationMs) : '';
-        if (why) {
-          const halves = splitInHalf(region.startSample, region.endSample);
-          if (halves) {
-            retryBudget -= 1;
-            const halfMs = Math.round(region.durationMs / 2);
-            const two = [];
-            for (let h = 0; h < halves.length; h++) {
-              const r = await runOne({ ...halves[h], durationMs: halfMs });
-              if (r.text) two.push({ ...r, offsetMs: h === 0 ? 0 : halfMs, durationMs: halfMs });
-            }
-            const gained = two.reduce((n, t) => n + informationUnits(t.text), 0);
-            if (gained > informationUnits(one.text) * 1.25) {
-              parts = two;
-              if (state?.diag) {
-                state.diag.splitRetries = (state.diag.splitRetries || 0) + 1;
-                state.diag.lastSplitReason = why;
-              }
+      // 密度体检：长段却几乎没字 → 云端大概率截断了（语速快的视频常见）。
+      // 切两半重试，信息量明显更大才替换；有次数预算，避免一路翻倍烧钱。
+      const why = one.text && retry.budget > 0 ? shouldRetrySplit(one.text, region.durationMs) : '';
+      if (why) {
+        const halves = splitInHalf(region.startSample, region.endSample);
+        if (halves) {
+          retry.budget -= 1;
+          const halfMs = Math.round(region.durationMs / 2);
+          const two = [];
+          for (let h = 0; h < halves.length; h++) {
+            const r = await runOne({ ...halves[h], durationMs: halfMs });
+            if (r.text) two.push({ ...r, offsetMs: h === 0 ? 0 : halfMs, durationMs: halfMs });
+          }
+          const gained = two.reduce((n, t) => n + informationUnits(t.text), 0);
+          if (gained > informationUnits(one.text) * 1.25) {
+            parts = two;
+            if (state?.diag) {
+              state.diag.splitRetries = (state.diag.splitRetries || 0) + 1;
+              state.diag.lastSplitReason = why;
             }
           }
         }
-      } catch (err) {
-        noteError(`第 ${out.length + 1} 段失败：${err?.message || err}`);
-        continue;
       }
-
-      for (const seg of parts) {
-        if (!seg.text) continue;
-        out.push({
-          index: out.length,
-          startMs: absStartMs + (seg.offsetMs || 0),
-          durationMs: seg.durationMs,
-          status: 'done',
-          text: seg.text,
-          raw: seg.raw,
-          bytes: seg.bytes
-        });
-      }
-
-      if (onProgress) await onProgress(out.length);
+    } catch (err) {
+      noteError(`第 ${out.length + 1} 段失败：${err?.message || err}`);
+      continue;
     }
 
-    if (onProgress) await onProgress(out.length);
+    for (const seg of parts) {
+      if (!seg.text) continue;
+      out.push({
+        index: out.length,
+        startMs: absStartMs + (seg.offsetMs || 0),
+        durationMs: seg.durationMs,
+        status: 'done',
+        text: seg.text,
+        raw: seg.raw,
+        bytes: seg.bytes
+      });
+    }
+
+    if (onProgress) await onProgress(out.length, out);
+  }
+}
+
+function newTranscribeCtx({ maxRegionMs, retryBudget, shouldStop, onProgress, prior }) {
+  return {
+    maxRegionMs,
+    retry: { budget: retryBudget },
+    shouldStop,
+    onProgress,
+    prior: prior || [],
+    out: [],
+    skipped: 0,
+    done: coveredRanges(prior)
+  };
+}
+
+function finishTranscribeCtx(ctx) {
+  if (ctx.skipped && state?.diag) {
+    state.diag.ingestResumed = (state.diag.ingestResumed || 0) + ctx.skipped;
+    state.diag.ingestResumedSec = coveredSeconds(ctx.done);
+  }
+  return mergeTimeline(ctx.prior, ctx.out);
+}
+
+/**
+ * 把一段完整的 16k 单声道 PCM 按窗口切句后逐段转写。
+ * 「离线精校」和「整段提取」共用这一条路——两者的差别只在音频从哪来。
+ */
+async function transcribeWindowed(samples, opts = {}) {
+  const { maxRegionMs = 12000, onProgress, shouldStop, retryBudget = 24, prior = [] } = opts;
+  const ctx = newTranscribeCtx({ maxRegionMs, retryBudget, shouldStop, onProgress, prior });
+  const total = samples.length;
+  const winSamples = REFINE_WINDOW_SEC * TARGET_RATE;
+
+  for (let start = 0; start < total; start += winSamples) {
+    if (shouldStop && shouldStop()) break;
+    const end = Math.min(total, start + winSamples);
+    const window = samples.subarray(start, end);
+    await transcribeBlock(window, Math.round((start / TARGET_RATE) * 1000), ctx);
+    if (onProgress) await onProgress(ctx.out.length, ctx.out);
   }
 
-  if (skippedByResume && state?.diag) {
-    state.diag.ingestResumed = (state.diag.ingestResumed || 0) + skippedByResume;
-    state.diag.ingestResumedSec = coveredSeconds(done);
+  return finishTranscribeCtx(ctx);
+}
+
+/**
+ * 边解边转：pullChunk() 每次给一块 16k 单声道 PCM（返回 null 表示结束）。
+ *
+ * 这是「83 分钟视频不再撑爆内存」的关键：任何时刻内存里只有当前 3 分钟一块，
+ * 而不是整条音轨的 PCM（83 分钟 16k 双声道是 638MB）。
+ */
+async function transcribeStreaming(pullChunk, opts = {}) {
+  const { maxRegionMs = 12000, onProgress, shouldStop, retryBudget = 24, prior = [] } = opts;
+  const ctx = newTranscribeCtx({ maxRegionMs, retryBudget, shouldStop, onProgress, prior });
+  const blockSamples = REFINE_WINDOW_SEC * TARGET_RATE;
+
+  let buf = new Float32Array(blockSamples);
+  let filled = 0;
+  let consumedMs = 0;
+
+  const flush = async () => {
+    if (!filled) return;
+    await transcribeBlock(buf.subarray(0, filled), consumedMs, ctx);
+    consumedMs += Math.round((filled / TARGET_RATE) * 1000);
+    filled = 0;
+    if (onProgress) await onProgress(ctx.out.length, ctx.out);
+  };
+
+  for (;;) {
+    if (shouldStop && shouldStop()) break;
+    const chunk = await pullChunk();
+    if (!chunk || !chunk.length) break;
+
+    let off = 0;
+    while (off < chunk.length) {
+      const take = Math.min(blockSamples - filled, chunk.length - off);
+      buf.set(chunk.subarray(off, off + take), filled);
+      filled += take;
+      off += take;
+      if (filled >= blockSamples) await flush();
+    }
   }
 
-  // 新转的 + 上次留下的，按时间轴拼起来
-  return mergeTimeline(prior, out);
+  await flush();
+  return finishTranscribeCtx(ctx);
 }
 
 /* ---------------------------- 整段提取（直链） ---------------------------- */
@@ -1556,6 +1622,131 @@ function startIngest(url, videoKey) {
   return { ok: true, started: true };
 }
 
+function decodeCtor() {
+  const G = typeof globalThis !== 'undefined' ? globalThis : self;
+  return G.OfflineAudioContext || G.AudioContext;
+}
+
+/**
+ * 分片 MP4：**边解边转**。
+ *
+ * 每片只解码几百 KB（实测 B 站 5 秒一片、196KB），解出来立刻混成单声道喂给转写器，
+ * 转完就丢。任何时刻内存里只有「一片 PCM + 三分钟缓冲」，与视频多长无关。
+ * 83 分钟的视频整段解码要 638MB（会被浏览器静默回收），这里只要几十 MB。
+ */
+async function transcribeFragments(buf, plan, prior, myToken) {
+  const bytes = new Uint8Array(buf);
+  const init = bytes.slice(0, plan.initEnd);
+  const Ctx = decodeCtor();
+  const ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
+  const total = plan.spans.length;
+  let index = 0;
+  let decodedSec = 0;
+
+  state.diag.ingestMode = 'fmp4';
+  state.diag.ingestFragments = total;
+
+  try {
+    const pullChunk = async () => {
+      while (index < total) {
+        const span = plan.spans[index++];
+        state.diag.ingestDone = index;
+        const blob = new Blob([init, bytes.subarray(span.start, span.end)], { type: 'video/mp4' });
+        try {
+          const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+          decodedSec += audio.duration || 0;
+          return mixToMonoInPlace(audio);
+        } catch (err) {
+          // 单片坏了不影响整条：记一笔继续下一片
+          noteError(`第 ${index} 片解不开：${err?.message || err}`);
+          state.diag.ingestBadFragments = (state.diag.ingestBadFragments || 0) + 1;
+        }
+      }
+      return null;
+    };
+
+    const items = await transcribeStreaming(pullChunk, {
+      prior,
+      shouldStop: () => myToken !== ingestToken,
+      retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
+      onProgress: ingestOnProgress
+    });
+    state.diag.ingestDurationMs = Math.round(decodedSec * 1000);
+    return items;
+  } finally {
+    await ctx.close().catch(() => {});
+  }
+}
+
+/** 一整段 PCM：小文件走这条路（解码一次，内存可控） */
+async function transcribeWholeFile(buf, prior, myToken) {
+  const Ctx = decodeCtor();
+  const ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
+  let audio;
+  try {
+    audio = await ctx.decodeAudioData(buf);
+  } catch (err) {
+    throw new Error(`解码失败：${err?.message || err}（若是 B 站 m4s，属于分片 MP4，浏览器解码器可能不支持）`);
+  }
+
+  if (!Number.isFinite(audio.duration) || !audio.duration) {
+    await ctx.close().catch(() => {});
+    throw new Error('解码后拿不到时长');
+  }
+  if (audio.duration > INGEST_MAX_SECONDS) {
+    await ctx.close().catch(() => {});
+    throw new Error(`音频 ${Math.round(audio.duration / 60)} 分钟，超过 45 分钟上限，改用实时录制`);
+  }
+
+  // 估算真正要占的内存：文件缓冲 + 解码后的 PCM（立体声还要一份单声道）
+  const pcmMB = Math.round((audio.length * audio.numberOfChannels * 4) / 1048576);
+  const fileMB = Math.round(buf.byteLength / 1048576);
+  const monoMB = audio.numberOfChannels > 1 ? Math.round(pcmMB / audio.numberOfChannels) : 0;
+  const needResample = audio.sampleRate !== TARGET_RATE;
+  const estPeakMB = fileMB + pcmMB + monoMB + (needResample ? monoMB : 0);
+  state.diag.ingestFileMB = fileMB;
+  state.diag.ingestPcmMB = pcmMB;
+  state.diag.ingestEstPeakMB = estPeakMB;
+  state.diag.ingestMode = 'whole';
+  if (estPeakMB > INGEST_MEM_BUDGET_MB) {
+    await ctx.close().catch(() => {});
+    const minutes = Math.round(audio.duration / 60);
+    throw new Error(
+      `这个视频约 ${minutes} 分钟，浏览器解码要占约 ${estPeakMB}MB 内存` +
+        `（文件 ${fileMB}MB + PCM ${pcmMB}MB），超过 ${INGEST_MEM_BUDGET_MB}MB 的安全上限。` +
+        `这条音轨不是分片 MP4，没法边解边转；请改用实时转录，或先把音频截到 20 分钟以内再提取。`
+    );
+  }
+
+  const durationMs = Math.round(audio.duration * 1000);
+  const sourceRate = audio.sampleRate;
+  let mono = mixToMonoInPlace(audio);
+  const samples = needResample ? resampleBox(mono, sourceRate, TARGET_RATE) : mono;
+  mono = null;
+  audio = null;
+  await ctx.close().catch(() => {});
+  state.diag.ingestPcmMB = Math.round((samples.length * 4) / 1048576);
+  state.diag.ingestDurationMs = durationMs;
+
+  return transcribeWindowed(samples, {
+    prior,
+    shouldStop: () => myToken !== ingestToken,
+    retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
+    onProgress: ingestOnProgress
+  });
+}
+
+/** 进度回调：落盘 + 每 8 句存一次库（被挂起也不白跑） */
+let checkpointAt = 0;
+async function ingestOnProgress(count, items) {
+  state.diag.ingestDone = count;
+  if (count - checkpointAt >= 8) {
+    checkpointAt = count;
+    if (items && items.length) waitSaveDoc(items);
+  }
+  await saveState();
+}
+
 async function runIngest(url, myToken) {
   const t0 = Date.now();
   try {
@@ -1588,86 +1779,35 @@ async function runIngest(url, myToken) {
     state.diag.ingestPhase = 'decode';
     await saveState();
 
-    /* --- 2. 解码（浏览器自带的解码器，不需要额外依赖）--- */
-    // 用 16k 的 OfflineAudioContext 解码：decodeAudioData 会按上下文采样率重采样，
-    // AudioBuffer 从 48k 立体声变成 16k 立体声，内存只有原来的 1/3；
-    // 而且不占用音频输出设备，不会踩自动播放策略。
-    // 取全局构造函数：浏览器里 self === window，但某些上下文里未必有 self，
-    // 统一走 globalThis 最稳（仿真里也是靠它注入的）
-    const G = typeof globalThis !== 'undefined' ? globalThis : self;
-    const Ctx = G.OfflineAudioContext || G.AudioContext;
-    const ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
-    let audio;
-    try {
-      audio = await ctx.decodeAudioData(buf);
-    } catch (err) {
-      throw new Error(`解码失败：${err?.message || err}（若是 B 站 m4s，属于分片 MP4，浏览器解码器可能不支持）`);
-    }
-
-    if (!Number.isFinite(audio.duration) || !audio.duration) {
-      await ctx.close().catch(() => {});
-      throw new Error('解码后拿不到时长');
-    }
-    if (audio.duration > INGEST_MAX_SECONDS) {
-      await ctx.close().catch(() => {});
-      throw new Error(`音频 ${Math.round(audio.duration / 60)} 分钟，超过 45 分钟上限，改用实时录制`);
-    }
-
-    // 估算真正要占的内存：文件缓冲 + 解码后的 PCM（立体声还要一份单声道）
-    const pcmMB = Math.round((audio.length * audio.numberOfChannels * 4) / 1048576);
-    const fileMB = Math.round(buf.byteLength / 1048576);
-    const monoMB = audio.numberOfChannels > 1 ? Math.round(pcmMB / audio.numberOfChannels) : 0;
-    const needResample = audio.sampleRate !== TARGET_RATE;
-    const estPeakMB = fileMB + pcmMB + monoMB + (needResample ? monoMB : 0);
-    state.diag.ingestFileMB = fileMB;
-    state.diag.ingestPcmMB = pcmMB;
-    state.diag.ingestEstPeakMB = estPeakMB;
-    if (estPeakMB > INGEST_MEM_BUDGET_MB) {
-      await ctx.close().catch(() => {});
-      const minutes = Math.round(audio.duration / 60);
-      throw new Error(
-        `这个视频约 ${minutes} 分钟，浏览器解码要占约 ${estPeakMB}MB 内存` +
-          `（文件 ${fileMB}MB + PCM ${pcmMB}MB），超过 ${INGEST_MEM_BUDGET_MB}MB 的安全上限，` +
-          `继续下去会被浏览器静默挂起。请改用实时转录，或先把音频截到 20 分钟以内再提取。`
-      );
-    }
-
-    // 原地混成单声道：不再新开一份数组（45 分钟能省 160MB 以上）
-    const durationMs = Math.round(audio.duration * 1000);
-    const sourceRate = audio.sampleRate;
-    let mono = mixToMonoInPlace(audio);
-    const samples = needResample ? resampleBox(mono, sourceRate, TARGET_RATE) : mono;
-    mono = null;
-    audio = null;
-    await ctx.close().catch(() => {});
-    state.diag.ingestPcmMB = Math.round((samples.length * 4) / 1048576);
-
-    state.diag.ingestDurationMs = durationMs;
-    state.diag.ingestPhase = 'transcribe';
-    await saveState();
-
-    /* --- 3. 整段转写 --- */
+    /* --- 2. 分片 MP4（B 站 m4s / DASH）：边解边转，内存只跟一片有关 --- */
     const prior = state.ingestPrior || [];
     if (prior.length) {
       state.diag.ingestResumeFrom = prior.length;
       await saveState();
     }
 
-    // 边跑边存库：万一 offscreen 被挂起，已完成的句子不会白跑
-    let lastCheckpoint = 0;
-    const items = await transcribeWindowed(samples, {
-      prior,
-      shouldStop: () => myToken !== ingestToken,
-      retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
-      onProgress: async (count) => {
-        state.diag.ingestDone = count;
-        if (count - lastCheckpoint >= 8) {
-          lastCheckpoint = count;
-          waitSaveDoc(items || []);
-        }
-        await saveState();
-      }
-    });
+    state.diag.ingestPhase = 'decode';
+    checkpointAt = 0;
+    await saveState();
+
+    let plan = null;
+    try {
+      plan = planFragments(new Uint8Array(buf));
+    } catch (err) {
+      state.diag.ingestPlanError = String(err?.message || err).slice(0, 120);
+    }
+
+    state.diag.ingestPhase = 'transcribe';
+    await saveState();
+
+    let items;
+    if (plan && plan.ok && plan.spans.length > 1) {
+      // 分片 MP4：83 分钟也能做，因为内存只跟一片有关
+      items = await transcribeFragments(buf, plan, prior, myToken);
+    } else {
+      // 整段 PCM：小文件走这条（解码一次）；大文件会在估算后被拒
+      items = await transcribeWholeFile(buf, prior, myToken);
+    }
 
     // 被取消：把已经转好的部分留下，状态收尾
     if (myToken !== ingestToken) {
