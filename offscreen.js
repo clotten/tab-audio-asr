@@ -1345,6 +1345,11 @@ async function transcribeBlock(block, offsetMs, ctx) {
     maxJoinGapMs: 2500
   });
 
+  if (state?.diag) {
+    state.diag.ingestBlocks = (state.diag.ingestBlocks || 0) + 1;
+    state.diag.ingestRegions = (state.diag.ingestRegions || 0) + regions.length;
+  }
+
   const runOne = async (seg) => {
     const slice = block.subarray(seg.startSample, seg.endSample);
     const wav = new Blob([encodeWav(slice, TARGET_RATE)], { type: 'audio/wav' });
@@ -1628,6 +1633,25 @@ function decodeCtor() {
 }
 
 /**
+ * 关掉解码上下文。
+ *
+ * 注意：OfflineAudioContext **没有 close()**（只有 AudioContext 有），
+ * 之前直接 `ctx.close()` 会让整个提取在收尾时抛 
+ * `ctx.close is not a function`，前面转的全白费（真机踩过）。
+ */
+function closeCtx(ctx) {
+  try {
+    if (ctx && typeof ctx.close === 'function') {
+      const r = ctx.close();
+      if (r && typeof r.catch === 'function') return r.catch(() => {});
+    }
+  } catch {
+    /* 关不掉就算了，不影响结果 */
+  }
+  return Promise.resolve();
+}
+
+/**
  * 分片 MP4：**边解边转**。
  *
  * 每片只解码几百 KB（实测 B 站 5 秒一片、196KB），解出来立刻混成单声道喂给转写器，
@@ -1638,8 +1662,10 @@ async function transcribeFragments(buf, plan, prior, myToken) {
   const bytes = new Uint8Array(buf);
   const init = bytes.slice(0, plan.initEnd);
   const Ctx = decodeCtor();
-  const ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
+  let ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
   const total = plan.spans.length;
+  // 每 RESET_EVERY 片换一个上下文：解码器内部若攒了缓冲，也不会一路涨到被回收
+  const RESET_EVERY = 150;
   let index = 0;
   let decodedSec = 0;
 
@@ -1651,11 +1677,24 @@ async function transcribeFragments(buf, plan, prior, myToken) {
       while (index < total) {
         const span = plan.spans[index++];
         state.diag.ingestDone = index;
+
+        if (index % RESET_EVERY === 0) {
+          await closeCtx(ctx);
+          ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
+        }
         const blob = new Blob([init, bytes.subarray(span.start, span.end)], { type: 'video/mp4' });
         try {
           const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
           decodedSec += audio.duration || 0;
-          return mixToMonoInPlace(audio);
+          state.diag.ingestDecodedSec = Math.round(decodedSec);
+          state.diag.ingestFragDone = index;
+
+          // 立刻拷成独立数组再返回：返回 AudioBuffer 的视图会让整块解码缓冲
+          // 一直被引用（1000 片就是几百 MB 的垃圾），这是内存一路上涨的原因。
+          const mono = mixToMonoInPlace(audio);
+          const copy = new Float32Array(mono.length);
+          copy.set(mono);
+          return copy;
         } catch (err) {
           // 单片坏了不影响整条：记一笔继续下一片
           noteError(`第 ${index} 片解不开：${err?.message || err}`);
@@ -1672,9 +1711,10 @@ async function transcribeFragments(buf, plan, prior, myToken) {
       onProgress: ingestOnProgress
     });
     state.diag.ingestDurationMs = Math.round(decodedSec * 1000);
+    state.diag.ingestDecodedSec = Math.round(decodedSec);
     return items;
   } finally {
-    await ctx.close().catch(() => {});
+    await closeCtx(ctx);
   }
 }
 
@@ -1690,11 +1730,11 @@ async function transcribeWholeFile(buf, prior, myToken) {
   }
 
   if (!Number.isFinite(audio.duration) || !audio.duration) {
-    await ctx.close().catch(() => {});
+    await closeCtx(ctx);
     throw new Error('解码后拿不到时长');
   }
   if (audio.duration > INGEST_MAX_SECONDS) {
-    await ctx.close().catch(() => {});
+    await closeCtx(ctx);
     throw new Error(`音频 ${Math.round(audio.duration / 60)} 分钟，超过 45 分钟上限，改用实时录制`);
   }
 
@@ -1709,7 +1749,7 @@ async function transcribeWholeFile(buf, prior, myToken) {
   state.diag.ingestEstPeakMB = estPeakMB;
   state.diag.ingestMode = 'whole';
   if (estPeakMB > INGEST_MEM_BUDGET_MB) {
-    await ctx.close().catch(() => {});
+    await closeCtx(ctx);
     const minutes = Math.round(audio.duration / 60);
     throw new Error(
       `这个视频约 ${minutes} 分钟，浏览器解码要占约 ${estPeakMB}MB 内存` +
@@ -1724,7 +1764,7 @@ async function transcribeWholeFile(buf, prior, myToken) {
   const samples = needResample ? resampleBox(mono, sourceRate, TARGET_RATE) : mono;
   mono = null;
   audio = null;
-  await ctx.close().catch(() => {});
+  await closeCtx(ctx);
   state.diag.ingestPcmMB = Math.round((samples.length * 4) / 1048576);
   state.diag.ingestDurationMs = durationMs;
 

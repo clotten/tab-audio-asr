@@ -249,6 +249,8 @@ function buildPcmAudio(rate) {
 }
 
 class FakeAudioContext {
+  // 说明：真实浏览器的 OfflineAudioContext 没有 close()，只有 AudioContext 有。
+  // 这里保留 close，另建一个 Offline 子类去掉它，专门盯住这个坑。
   constructor(opts) {
     this.state = 'running';
     this.destination = { connect() {} };
@@ -303,6 +305,13 @@ class FakeAudioContext {
     };
   }
 }
+
+class FakeOfflineAudioContext extends FakeAudioContext {
+  constructor(opts) {
+    super(opts);
+  }
+}
+delete FakeOfflineAudioContext.prototype.close;
 
 /** 模拟 AudioWorklet 节点：创建后自动按 6 倍速往里喂 PCM */
 class FakeAudioWorkletNode {
@@ -402,6 +411,27 @@ const fakeOrt = {
   env: { wasm: {}, logLevel: 'error' }
 };
 
+/** 造合成的分片 MP4：ftyp + moov + 4 组 moof+mdat（解析层不关心内容真假） */
+function buildFakeFmp4(fragCount = 4, mdatSize = 512) {
+  const box = (type, size) => {
+    const out = new Uint8Array(size);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, size, false);
+    for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+    return out;
+  };
+  const parts = [box('ftyp', 32), box('moov', 256)];
+  for (let i = 0; i < fragCount; i++) parts.push(box('moof', 64), box('mdat', mdatSize));
+  const total = parts.reduce((n, x) => n + x.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const part of parts) {
+    out.set(part, off);
+    off += part.length;
+  }
+  return out.buffer;
+}
+
 async function fakeFetch(url, init) {
   fetchCalls.push({ url, init });
 
@@ -411,6 +441,17 @@ async function fakeFetch(url, init) {
       status: 200,
       headers: { get: () => null },
       arrayBuffer: async () => new ArrayBuffer(64)
+    };
+  }
+
+  // 分片 MP4（B 站 m4s 那种）：给合成结构，走边解边转那条路
+  if (String(url).includes('.fmp4')) {
+    const bytes = buildFakeFmp4(4, 512);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      arrayBuffer: async () => bytes
     };
   }
 
@@ -514,7 +555,7 @@ const offscreenCtx = vm.createContext({
   document: fakeDocument,
   MediaRecorder: FakeMediaRecorder,
   AudioContext: FakeAudioContext,
-  OfflineAudioContext: FakeAudioContext,
+  OfflineAudioContext: FakeOfflineAudioContext,
   AudioWorkletNode: FakeAudioWorkletNode,
   ort: fakeOrt,
   performance: { now: () => Date.now() },
@@ -998,6 +1039,29 @@ console.log('\n16b) 续跑：再点一次整段提取，应跳过已转好的时
     fetchCalls.length - before < 4,
     '本次 ' + (fetchCalls.length - before) + ' 次'
   );
+}
+
+console.log('\n16c) 分片 MP4（B 站 m4s）：边解边转');
+{
+  decoderMode = 'speech';
+  const before = fetchCalls.length;
+  const res = await bus.send('popup', {
+    type: 'INGEST_URL',
+    url: 'https://cdn.example.com/lecture.fmp4',
+    videoKey: 'https://cdn.example.com/lecture.fmp4#8s'
+  });
+  check('分片提取请求被接受', res?.ok === true, JSON.stringify(res));
+
+  await sleep(2000);
+  const s = store.get('asrSession');
+  const d = s?.diag || {};
+  check('走了分片模式', d.ingestMode === 'fmp4', String(d.ingestMode));
+  check('识别出分片数', (d.ingestFragments || 0) === 4, String(d.ingestFragments));
+  check('每片都解码了', (d.ingestFragDone || 0) === 4, String(d.ingestFragDone));
+  check('累计解出的秒数合理', (d.ingestDecodedSec || 0) >= 8, String(d.ingestDecodedSec));
+  check('没有报错', !d.ingestError, String(d.ingestError));
+  check('转出了句子', (s?.segments || []).filter((x) => x.text).length >= 1, String((s?.segments || []).length));
+  check('分片模式也发了识别请求', fetchCalls.length - before >= 1, String(fetchCalls.length - before));
 }
 
 console.log('\n17) 历史稿：重新开始/清空不会把稿子弄丢');

@@ -844,11 +844,21 @@ try {
       const phase = { download: '下载中', decode: '解码中', transcribe: '转写中' }[session.diag?.ingestPhase] || '处理中';
       const fragMode = session.diag?.ingestMode === 'fmp4';
       const total = session.diag?.ingestFragments || 0;
-      const progress = done
-        ? fragMode && total
-          ? `（第 ${done}/${total} 片）`
-          : `（已转写 ${done} 段）`
-        : '';
+      const sec = session.diag?.ingestDecodedSec || 0;
+      let progress = '';
+      if (fragMode) {
+        // 长视频要能看出解到哪了：片号 + 已解出的秒数 + 已转出的句子数
+        const mins = Math.floor(sec / 60);
+        const rest = sec % 60;
+        const got = (session.segments || []).filter((s) => s.text).length;
+        progress =
+          '（' +
+          (done && total ? `第 ${done}/${total} 片，` : '') +
+          (sec ? `已解 ${mins} 分 ${rest} 秒，` : '') +
+          `转出 ${got} 句）`;
+      } else if (done) {
+        progress = `（已转写 ${done} 段）`;
+      }
       parts.liveText.textContent = `整段提取：${phase}${progress}`;
       area.classList.add('show');
       return;
