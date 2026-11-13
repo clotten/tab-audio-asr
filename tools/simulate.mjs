@@ -16,7 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import vm from 'node:vm';
 // 把真实的编解码 / VAD 注入 vm 上下文，这样仿真跑的是真代码而不是桩
-import { encodeWav, mixToMono, resampleBox, TARGET_SAMPLE_RATE } from '../lib/wav.js';
+import { encodeWav, mixToMono, mixToMonoInPlace, resampleBox, TARGET_SAMPLE_RATE } from '../lib/wav.js';
+import { coveredRanges, isCovered, coveredSeconds, mergeTimeline } from '../lib/ranges.js';
 import { detectSpeechRegions, createStreamingSegmenter } from '../lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -507,16 +508,23 @@ const offscreenCtx = vm.createContext({
   FormData,
   fetch: fakeFetch,
   navigator: { mediaDevices: { getUserMedia: async () => new FakeStream() }, storage: fakeStorage },
-  window: { AudioContext: FakeAudioContext, webkitAudioContext: FakeAudioContext },
+  window: { AudioContext: FakeAudioContext, webkitAudioContext: FakeAudioContext, OfflineAudioContext: FakeAudioContext },
+  self: {}, // offscreen 用 self 取全局（浏览器里 self === window）
   document: fakeDocument,
   MediaRecorder: FakeMediaRecorder,
   AudioContext: FakeAudioContext,
+  OfflineAudioContext: FakeAudioContext,
   AudioWorkletNode: FakeAudioWorkletNode,
   ort: fakeOrt,
   performance: { now: () => Date.now() },
   // 注入真实依赖
   encodeWav,
   mixToMono,
+  mixToMonoInPlace,
+  coveredRanges,
+  isCovered,
+  coveredSeconds,
+  mergeTimeline,
   resampleBox,
   TARGET_SAMPLE_RATE,
   detectSpeechRegions,
@@ -964,6 +972,30 @@ console.log('\n16) 整段提取（直链 MP4）：不用播放就能出全稿');
   decoderMode = 'silence';
   const bad = await bus.send('popup', { type: 'INGEST_URL', url: 'blob:https://x/abc' });
   check('blob: 链接被拒绝', bad?.ok === false && /http/i.test(bad.error || ''), JSON.stringify(bad));
+}
+
+console.log('\n16b) 续跑：再点一次整段提取，应跳过已转好的时间段');
+{
+  // 前面的用例可能把解码桩切成了静音，这里切回有语音的样本
+  decoderMode = 'speech';
+  const before = fetchCalls.length;
+  const res = await bus.send('popup', {
+    type: 'INGEST_URL',
+    url: 'https://cdn.example.com/lecture.mp4?auth_key=sim',
+    videoKey: 'https://cdn.example.com/lecture.mp4#20s'
+  });
+  check('续跑请求被接受', res?.ok === true, JSON.stringify(res));
+
+  await sleep(1500);
+  const s = store.get('asrSession');
+  const diag = s?.diag || {};
+  check('记录了续跑跳过的段数', (diag.ingestResumed || 0) >= 1, 'resumed=' + diag.ingestResumed);
+  check('续跑仍然有完整句子', (s?.segments || []).filter((x) => x.text).length >= 2, String((s?.segments || []).length));
+  check(
+    '续跑花的请求更少',
+    fetchCalls.length - before < 4,
+    '本次 ' + (fetchCalls.length - before) + ' 次'
+  );
 }
 
 console.log('\n17) 历史稿：重新开始/清空不会把稿子弄丢');

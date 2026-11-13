@@ -12,7 +12,8 @@
  * 30 秒空闲就会被回收；offscreen 文档是有生命周期的扩展页面，能撑住 1 小时的录音。
  */
 
-import { encodeWav, mixToMono, resampleBox, TARGET_SAMPLE_RATE } from './lib/wav.js';
+import { encodeWav, mixToMono, mixToMonoInPlace, resampleBox, TARGET_SAMPLE_RATE } from './lib/wav.js';
+import { coveredRanges, isCovered, coveredSeconds, mergeTimeline } from './lib/ranges.js';
 import { createWavWriter, readAudioFile } from './lib/audiofile.js';
 import { looksLikeHallucination } from './lib/hallucination.js';
 import { createSileroVad, createSileroGate } from './lib/silero.js';
@@ -1326,10 +1327,17 @@ function wavToSamples(arrayBuffer) {
  * 把一段完整的 16k 单声道 PCM 按窗口切句后逐段转写。
  * 「离线精校」和「整段提取」共用这一条路——两者的差别只在音频从哪来。
  */
-async function transcribeWindowed(samples, { maxRegionMs = 12000, onProgress, shouldStop, retryBudget = 24 } = {}) {
+async function transcribeWindowed(
+  samples,
+  { maxRegionMs = 12000, onProgress, shouldStop, retryBudget = 24, prior = [] } = {}
+) {
   const total = samples.length;
   const winSamples = REFINE_WINDOW_SEC * TARGET_RATE;
   const out = [];
+
+  // 断点续跑：之前已经转好的时间段直接跳过（不重复花钱）
+  const done = coveredRanges(prior);
+  let skippedByResume = 0;
 
   for (let start = 0; start < total; start += winSamples) {
     const end = Math.min(total, start + winSamples);
@@ -1354,6 +1362,12 @@ async function transcribeWindowed(samples, { maxRegionMs = 12000, onProgress, sh
     for (const region of regions) {
       if (shouldStop && shouldStop()) return out; // 用户取消：保留已完成的段
       const absStartMs = Math.round((start / TARGET_RATE) * 1000) + region.startMs;
+
+      // 这一段上次已经转过了
+      if (done.length && isCovered(done, absStartMs, region.durationMs)) {
+        skippedByResume += 1;
+        continue;
+      }
 
       let parts;
       try {
@@ -1407,14 +1421,37 @@ async function transcribeWindowed(samples, { maxRegionMs = 12000, onProgress, sh
     if (onProgress) await onProgress(out.length);
   }
 
-  return out;
+  if (skippedByResume && state?.diag) {
+    state.diag.ingestResumed = (state.diag.ingestResumed || 0) + skippedByResume;
+    state.diag.ingestResumedSec = coveredSeconds(done);
+  }
+
+  // 新转的 + 上次留下的，按时间轴拼起来
+  return mergeTimeline(prior, out);
 }
 
 /* ---------------------------- 整段提取（直链） ---------------------------- */
 
 /** 单个媒体文件的上限：超过就别在浏览器里解码了，改用实时录制 */
+/** 单次下载的文件上限：再大就改用实时录制（真正的判据是内存，不是能不能下） */
 const INGEST_MAX_BYTES = 600 * 1024 * 1024;
 const INGEST_MAX_SECONDS = 45 * 60;
+
+/**
+ * offscreen 文档的内存预算。
+ *
+ * 实测教训：45 分钟的视频按默认 48k 解码，AudioBuffer 就是 1.04GB（立体声），
+ * 加上文件本身和单声道拷贝，峰值能到 2.3GB —— 浏览器会直接把文档挂起，
+ * 而且不给任何报错，用户只看到卡在提取中永远不动。
+ *
+ * 现在：解码时就降到 16k（峰值降到约 1/6），并且按估算面积提前拒绝。
+ * 宁可明确告诉用户这个视频太大、请用实时转录或截取前 20 分钟，
+ * 也不要跑到一半被静默杀掉。
+ */
+const INGEST_MEM_BUDGET_MB = 480;
+
+/** 解码时就把采样率降到 16k：AudioBuffer 直接小 3 倍，还对上了识别模型的采样率 */
+const INGEST_DECODE_RATE = 16000;
 
 /**
  * 从直链媒体整段提取字幕——**不用等播放**。
@@ -1467,6 +1504,12 @@ function startIngest(url, videoKey) {
   if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
   if (state?.diag?.ingesting) return { ok: false, error: '正在整段提取中，等它跑完再点' };
 
+  // 断点续跑：先记住上一次的句子（state 可能马上要被重置成新会话）
+  const prevKey = state?.videoKey || '';
+  const prevDone = Array.isArray(state?.segments)
+    ? state.segments.filter((s) => s && s.status === 'done' && s.text)
+    : [];
+
   if (!state || state.status === 'stopped' || state.status === 'error') {
     state = {
       status: 'processing',
@@ -1499,9 +1542,11 @@ function startIngest(url, videoKey) {
   state.diag.ingestDone = 0;
   state.diag.ingestError = '';
   state.diag.source = 'url'; // 标记：这份稿子来自直链整段提取（不是录制）
+
   // 这份稿子属于哪个视频（隔离 + 入库都用它）。
   // 调用方没给就用媒体地址兜底——否则会「提取成功但字幕库是空的」（真机踩过）。
   state.videoKey = videoKey || normalizeVideoUrl(target);
+  state.ingestPrior = prevKey && prevKey === state.videoKey ? prevDone : [];
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 
@@ -1544,7 +1589,14 @@ async function runIngest(url, myToken) {
     await saveState();
 
     /* --- 2. 解码（浏览器自带的解码器，不需要额外依赖）--- */
-    const ctx = new AudioContext();
+    // 用 16k 的 OfflineAudioContext 解码：decodeAudioData 会按上下文采样率重采样，
+    // AudioBuffer 从 48k 立体声变成 16k 立体声，内存只有原来的 1/3；
+    // 而且不占用音频输出设备，不会踩自动播放策略。
+    // 取全局构造函数：浏览器里 self === window，但某些上下文里未必有 self，
+    // 统一走 globalThis 最稳（仿真里也是靠它注入的）
+    const G = typeof globalThis !== 'undefined' ? globalThis : self;
+    const Ctx = G.OfflineAudioContext || G.AudioContext;
+    const ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
     let audio;
     try {
       audio = await ctx.decodeAudioData(buf);
@@ -1561,20 +1613,58 @@ async function runIngest(url, myToken) {
       throw new Error(`音频 ${Math.round(audio.duration / 60)} 分钟，超过 45 分钟上限，改用实时录制`);
     }
 
-    const mono = mixToMono(audio);
-    const samples = audio.sampleRate === TARGET_RATE ? mono : resampleBox(mono, audio.sampleRate, TARGET_RATE);
-    await ctx.close().catch(() => {});
+    // 估算真正要占的内存：文件缓冲 + 解码后的 PCM（立体声还要一份单声道）
+    const pcmMB = Math.round((audio.length * audio.numberOfChannels * 4) / 1048576);
+    const fileMB = Math.round(buf.byteLength / 1048576);
+    const monoMB = audio.numberOfChannels > 1 ? Math.round(pcmMB / audio.numberOfChannels) : 0;
+    const needResample = audio.sampleRate !== TARGET_RATE;
+    const estPeakMB = fileMB + pcmMB + monoMB + (needResample ? monoMB : 0);
+    state.diag.ingestFileMB = fileMB;
+    state.diag.ingestPcmMB = pcmMB;
+    state.diag.ingestEstPeakMB = estPeakMB;
+    if (estPeakMB > INGEST_MEM_BUDGET_MB) {
+      await ctx.close().catch(() => {});
+      const minutes = Math.round(audio.duration / 60);
+      throw new Error(
+        `这个视频约 ${minutes} 分钟，浏览器解码要占约 ${estPeakMB}MB 内存` +
+          `（文件 ${fileMB}MB + PCM ${pcmMB}MB），超过 ${INGEST_MEM_BUDGET_MB}MB 的安全上限，` +
+          `继续下去会被浏览器静默挂起。请改用实时转录，或先把音频截到 20 分钟以内再提取。`
+      );
+    }
 
-    state.diag.ingestDurationMs = Math.round(audio.duration * 1000);
+    // 原地混成单声道：不再新开一份数组（45 分钟能省 160MB 以上）
+    const durationMs = Math.round(audio.duration * 1000);
+    const sourceRate = audio.sampleRate;
+    let mono = mixToMonoInPlace(audio);
+    const samples = needResample ? resampleBox(mono, sourceRate, TARGET_RATE) : mono;
+    mono = null;
+    audio = null;
+    await ctx.close().catch(() => {});
+    state.diag.ingestPcmMB = Math.round((samples.length * 4) / 1048576);
+
+    state.diag.ingestDurationMs = durationMs;
     state.diag.ingestPhase = 'transcribe';
     await saveState();
 
     /* --- 3. 整段转写 --- */
+    const prior = state.ingestPrior || [];
+    if (prior.length) {
+      state.diag.ingestResumeFrom = prior.length;
+      await saveState();
+    }
+
+    // 边跑边存库：万一 offscreen 被挂起，已完成的句子不会白跑
+    let lastCheckpoint = 0;
     const items = await transcribeWindowed(samples, {
+      prior,
       shouldStop: () => myToken !== ingestToken,
       retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
       onProgress: async (count) => {
         state.diag.ingestDone = count;
+        if (count - lastCheckpoint >= 8) {
+          lastCheckpoint = count;
+          waitSaveDoc(items || []);
+        }
         await saveState();
       }
     });
