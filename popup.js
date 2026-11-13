@@ -686,6 +686,25 @@ async function ensureHostPermission(baseUrl) {
  * 流程：探测拿到直链 → offscreen 下载 → 浏览器解码 → 16k 单声道 → 窗口化转写 → 纠错。
  * 进度靠 session.diag.ingest* 推回来，所以这里只负责发指令和提示。
  */
+/**
+ * 「只提取前 N 分钟」的读取与预估。
+ *
+ * 为什么要有：83 分钟的视频按 12 秒一段就是 ~416 次识别请求，
+ * 用户点一下之前应该知道这件事（真机上一次没注意就烧了几百次请求）。
+ */
+function ingestMaxMinutes() {
+  const el = el('ingestMaxMin');
+  const n = Number(el?.value);
+  return Number.isFinite(n) && n > 0 ? Math.min(600, Math.round(n)) : 0;
+}
+
+/** 估算这次要发多少次识别请求（按 12 秒一段） */
+function estimateRequests(totalSec, maxMin) {
+  const use = maxMin ? Math.min(totalSec, maxMin * 60) : totalSec;
+  return Math.max(1, Math.ceil(use / 12));
+}
+
+
 async function ingestFromPage() {
   setNoteSink('doc');
 

@@ -17,10 +17,10 @@
 
 // 版本戳：控制台一眼看出页面里跑的是哪一版内容脚本（排查"改了没生效"）
 try {
-  console.log('[字幕助手·页面] 内容脚本已加载 v2026-11-13a');
+  console.log('[字幕助手·页面] 内容脚本已加载 v2026-11-13b');
   // 同时写进 DOM：自动化/远程排查时不用开控制台就能确认页面跑的是哪一版
   try {
-    document.documentElement.dataset.dshAsrVersion = '2026-11-13a';
+    document.documentElement.dataset.dshAsrVersion = '2026-11-13b';
   } catch {}
 } catch {}
 

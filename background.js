@@ -741,7 +741,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           } catch {
             cdnRules = -1;
           }
-          const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url, videoKey: msg.videoKey }).catch((err) => ({
+          const res = await callOffscreenTask({ type: 'INGEST_URL', url: msg.url, videoKey: msg.videoKey, maxMinutes: msg.maxMinutes || 0 }).catch((err) => ({
             ok: false,
             error: `后台页面未响应：${String(err?.message || err)}`
           }));

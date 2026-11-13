@@ -1569,7 +1569,7 @@ function cancelIngest() {
   saveState();
   return { ok: true };
 }
-function startIngest(url, videoKey) {
+function startIngest(url, videoKey, maxMinutes = 0) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
   if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
@@ -1618,6 +1618,7 @@ function startIngest(url, videoKey) {
   // 调用方没给就用媒体地址兜底——否则会「提取成功但字幕库是空的」（真机踩过）。
   state.videoKey = videoKey || normalizeVideoUrl(target);
   state.ingestPrior = prevKey && prevKey === state.videoKey ? prevDone : [];
+  state.ingestMaxMinutes = Number.isFinite(maxMinutes) && maxMinutes > 0 ? Math.min(600, Math.round(maxMinutes)) : 0;
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 
@@ -1666,6 +1667,7 @@ async function transcribeFragments(buf, plan, prior, myToken) {
   const total = plan.spans.length;
   // 每 RESET_EVERY 片换一个上下文：解码器内部若攒了缓冲，也不会一路涨到被回收
   const RESET_EVERY = 150;
+  const maxSec = (state.ingestMaxMinutes || 0) * 60;
   let index = 0;
   let decodedSec = 0;
 
@@ -1677,6 +1679,9 @@ async function transcribeFragments(buf, plan, prior, myToken) {
       while (index < total) {
         const span = plan.spans[index++];
         state.diag.ingestDone = index;
+
+        // 只提取前 N 分钟：解够就停，省钱
+        if (maxSec && decodedSec >= maxSec) return null;
 
         if (index % RESET_EVERY === 0) {
           await closeCtx(ctx);
@@ -1768,7 +1773,16 @@ async function transcribeWholeFile(buf, prior, myToken) {
   state.diag.ingestPcmMB = Math.round((samples.length * 4) / 1048576);
   state.diag.ingestDurationMs = durationMs;
 
-  return transcribeWindowed(samples, {
+  const maxSec = (state.ingestMaxMinutes || 0) * 60;
+  const usable = maxSec && samples.length > maxSec * TARGET_RATE
+    ? samples.subarray(0, maxSec * TARGET_RATE)
+    : samples;
+  if (usable !== samples && state?.diag) {
+    state.diag.ingestTrimmedSec = Math.round(maxSec);
+    state.diag.ingestDurationMs = Math.round((usable.length / TARGET_RATE) * 1000);
+  }
+
+  return transcribeWindowed(usable, {
     prior,
     shouldStop: () => myToken !== ingestToken,
     retryBudget: Number.isFinite(settings.splitRetryBudget) ? settings.splitRetryBudget : 24,
@@ -2331,7 +2345,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
         case 'INGEST_URL':
           // 直链整段提取：立刻返回，进度靠 state.diag 推给弹窗
-          sendResponse(startIngest(msg.url, msg.videoKey));
+          sendResponse(startIngest(msg.url, msg.videoKey, msg.maxMinutes || 0));
           break;
 
         case 'VAD_SELFTEST':
