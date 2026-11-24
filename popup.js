@@ -786,6 +786,43 @@ async function ingestFromPage() {
       ? `${platformForPage(keyPageUrl)?.id || 'media'}:${platformKey}#${Math.round(duration || 0)}s`
       : videoKeyOf({ href: keyPageUrl, duration });
 
+    // 优先走"播放器字节镜像"：它是唯一能确定"这就是当前这条视频"的数据源。
+    //
+    // ⚠️ 现状（2026-11-25）：整条链路（ms-hook → MIRROR_STATUS / MIRROR_INGEST →
+    // offscreen.startMirrorIngest）已经接通、单测与仿真都过，但**还没在真机上验收**。
+    // 为了不影响 B 站 / 直链这些已验证可靠的路径，这里用开关默认关闭。
+    // 想试的时候把 MIRROR_INGEST_ENABLED 改成 true，刷新插件 + 刷新页面（必须刷新，
+    // 钩子要在 document_start 注入，否则抓不到已经建好的 MediaSource）。
+    const MIRROR_INGEST_ENABLED = false;
+    let mirrored = false;
+    if (MIRROR_INGEST_ENABLED) {
+      try {
+        const st = await chrome.runtime.sendMessage({ type: 'MIRROR_STATUS', tabId: activeTab?.id });
+        const audioTracks = (st?.audio || []).filter((t) => (t.bytes || 0) > 50 * 1024);
+        if (audioTracks.length) {
+          note(`已经从播放器镜像到音频（${Math.round(audioTracks[0].bytes / 1024)} KB），直接用它提取…`);
+          const res = await chrome.runtime
+            .sendMessage({
+              type: 'MIRROR_INGEST',
+              tabId: activeTab?.id,
+              videoKey,
+              expectDurationMs: Math.round((duration || 0) * 1000)
+            })
+            .catch((err) => ({ ok: false, error: String(err?.message || err) }));
+
+          if (res?.ok) {
+            mirrored = true;
+            note('已在后台用播放器里的音频开始提取，可以关掉弹窗，跑完会写进文字稿。');
+          } else {
+            note(`镜像提取没成功：${res?.error || '未知'}；改用下载直链…`, 'err');
+          }
+        }
+      } catch {
+        /* 没有镜像能力就退回 URL 路径 */
+      }
+    }
+
+    if (!mirrored) {
     const res = await chrome.runtime
       .sendMessage({
       type: 'INGEST_URL',
@@ -807,6 +844,7 @@ async function ingestFromPage() {
       note(`整段提取没能开始：${res?.error || '未知错误'} ${diag}`, 'err');
     } else {
       note('已在后台开始整段提取，可以关掉弹窗，跑完会写进文字稿。');
+    }
     }
   } finally {
     btn.disabled = false;

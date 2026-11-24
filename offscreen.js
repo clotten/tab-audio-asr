@@ -1569,12 +1569,11 @@ function cancelIngest() {
   saveState();
   return { ok: true };
 }
-function startIngest(url, videoKey, maxMinutes = 0, expectDurationMs = 0) {
-  const target = String(url || '').trim();
-  if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
-  if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
-  if (state?.diag?.ingesting) return { ok: false, error: '正在整段提取中，等它跑完再点' };
-
+/**
+ * 统一的会话初始化：直链提取和"镜像字节提取"都从这里开始。
+ * 返回 { ok } ；失败时带上给用户看的原因。
+ */
+function beginIngestSession(videoKey, expectDurationMs = 0, maxMinutes = 0, sourceLabel = 'url') {
   // 断点续跑：先记住上一次的句子（state 可能马上要被重置成新会话）
   const prevKey = state?.videoKey || '';
   const prevDone = Array.isArray(state?.segments)
@@ -1612,14 +1611,30 @@ function startIngest(url, videoKey, maxMinutes = 0, expectDurationMs = 0) {
   state.diag.ingestBytes = 0;
   state.diag.ingestDone = 0;
   state.diag.ingestError = '';
-  state.diag.source = 'url'; // 标记：这份稿子来自直链整段提取（不是录制）
+  state.diag.source = sourceLabel; // url = 直链下载；mirror = 播放器字节镜像
 
-  // 这份稿子属于哪个视频（隔离 + 入库都用它）。
-  // 调用方没给就用媒体地址兜底——否则会「提取成功但字幕库是空的」（真机踩过）。
-  state.videoKey = videoKey || normalizeVideoUrl(target);
+  // 这份稿子属于哪个视频（隔离 + 入库都用它）
+  state.videoKey = videoKey || '';
   state.ingestPrior = prevKey && prevKey === state.videoKey ? prevDone : [];
   state.ingestMaxMinutes = Number.isFinite(maxMinutes) && maxMinutes > 0 ? Math.min(600, Math.round(maxMinutes)) : 0;
   state.expectDurationMs = Number.isFinite(expectDurationMs) && expectDurationMs > 0 ? expectDurationMs : 0;
+  saveState();
+
+  return { ok: true };
+}
+
+function startIngest(url, videoKey, maxMinutes = 0, expectDurationMs = 0) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
+  if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
+  if (state?.diag?.ingesting) return { ok: false, error: '正在整段提取中，等它跑完再点' };
+
+  // 这份稿子属于哪个视频（隔离 + 入库都用它）。
+  // 调用方没给就用媒体地址兜底——否则会「提取成功但字幕库是空的」（真机踩过）。
+  const key = videoKey || normalizeVideoUrl(target);
+  const started = beginIngestSession(key, expectDurationMs, maxMinutes, 'url');
+  if (!started.ok) return started;
+
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 
@@ -1852,6 +1867,28 @@ async function runIngest(url, myToken) {
     }
 
     const buf = await res.arrayBuffer();
+    await ingestBuffer(buf, myToken, t0);
+  } catch (err) {
+    if (state) {
+      state.diag.ingesting = false;
+      state.diag.ingestPhase = 'error';
+      state.diag.ingestError = String(err?.message || err).slice(0, 300);
+      if (state.status === 'processing') state.status = 'stopped';
+      state.stoppedAt = state.stoppedAt || Date.now();
+      await saveState().catch(() => {});
+    }
+  }
+}
+
+/**
+ * 拿到字节之后的公共流程：判断容器 → 分片/整段转写 → 存库 → 纠错。
+ *
+ * 抽出来是因为现在有两个来源：
+ *   1. 直链下载（runIngest）；
+ *   2. 播放器 MSE 字节镜像（blob: 站点唯一可靠的路，见 startMirrorIngest）。
+ */
+async function ingestBuffer(buf, myToken, t0 = Date.now()) {
+  {
     if (buf.byteLength > INGEST_MAX_BYTES) {
       throw new Error(`文件太大（${Math.round(buf.byteLength / 1048576)}MB），改用实时录制`);
     }
@@ -1922,7 +1959,42 @@ async function runIngest(url, myToken) {
       ? { changed: correction.changed, total: correction.corrected }
       : { error: correction?.error || '纠错未执行' };
     await saveState();
+  }
+}
+
+/**
+ * 从"播放器镜像下来的字节"整段提取。
+ *
+ * 为什么需要这条路：抖音这类站点，音轨地址既不在 DOM 也不在 JSON；
+ * 观察网络请求又会拿到别的视频（预加载）。唯一确定是当前视频的数据，
+ * 就是播放器 appendBuffer 进去的那份字节（见 content/ms-hook.js）。
+ *
+ * 这里只负责：base64 → ArrayBuffer → 复用 ingestBuffer 的公共流程。
+ */
+function startMirrorIngest(base64, videoKey, expectDurationMs = 0, mime = '') {
+  if (!base64) return { ok: false, error: '没有镜像数据' };
+  if (state?.diag?.ingesting) return { ok: false, error: '正在整段提取中，等它跑完再点' };
+  if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
+
+  let bytes;
+  try {
+    const bin = atob(base64);
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } catch (err) {
+    return { ok: false, error: `镜像数据解码失败：${err?.message || err}` };
+  }
+
+  // 走和 startIngest 一样的会话初始化
+  const started = beginIngestSession(videoKey || `mirror:${Date.now()}`, expectDurationMs);
+  if (!started.ok) return started;
+
+  state.diag.source = 'mirror';
+  state.diag.ingestMime = mime;
+  saveState();
+
+  const myToken = ++ingestToken;
+  ingestBuffer(bytes.buffer, myToken, Date.now()).catch(async (err) => {
     if (state) {
       state.diag.ingesting = false;
       state.diag.ingestPhase = 'error';
@@ -1931,7 +2003,9 @@ async function runIngest(url, myToken) {
       state.stoppedAt = state.stoppedAt || Date.now();
       await saveState().catch(() => {});
     }
-  }
+  });
+
+  return { ok: true, started: true, bytes: bytes.length };
 }
 
 async function handleRefine() {
@@ -2372,6 +2446,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case 'INGEST_URL':
           // 直链整段提取：立刻返回，进度靠 state.diag 推给弹窗
           sendResponse(startIngest(msg.url, msg.videoKey, msg.maxMinutes || 0, msg.expectDurationMs || 0));
+          break;
+
+        case 'INGEST_MIRROR':
+          // 从播放器镜像下来的字节（blob: 站点唯一可靠的路）：
+          // 直接解码这份音频，不经过任何 URL
+          sendResponse(
+            startMirrorIngest(msg.base64 || '', msg.videoKey || '', msg.expectDurationMs || 0, msg.mime || '')
+          );
           break;
 
         case 'VAD_SELFTEST':

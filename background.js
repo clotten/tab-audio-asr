@@ -420,6 +420,105 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
 
+        case 'MIRROR_STATUS': {
+          // 播放器有没有把音频字节喂进 MSE（有的话，那就是"当前这条视频"的确凿数据）
+          let tabId = msg.tabId;
+          if (!tabId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab?.id;
+          }
+          if (!tabId) {
+            sendResponse({ ok: false, error: '没有活动标签页' });
+            break;
+          }
+          try {
+            const out = await chrome.scripting.executeScript({
+              target: { tabId },
+              world: 'MAIN',
+              func: () => (typeof window.__dshMsStatus === 'function' ? window.__dshMsStatus() : null)
+            });
+            const status = out?.[0]?.result || null;
+            const audio = (status?.tracks || []).filter((t) => /audio\//i.test(t.mime));
+            sendResponse({ ok: true, status, audio });
+          } catch (err) {
+            sendResponse({ ok: false, error: String(err?.message || err) });
+          }
+          break;
+        }
+
+        case 'MIRROR_INGEST': {
+          // 把镜像到的音频字节搬出来，交给 offscreen 解码+转写。
+          // 这条路和 URL 无关：用的就是播放器此刻真正在放的这条视频。
+          let tabId = msg.tabId;
+          if (!tabId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab?.id;
+          }
+          if (!tabId) {
+            sendResponse({ ok: false, error: '没有活动标签页' });
+            break;
+          }
+
+          const CHUNK = 384 * 1024; // 每次搬 384KB（base64 后约 512KB，消息不会太大）
+          const parts = [];
+          let total = 0;
+          let mime = '';
+          try {
+            for (let off = 0; ; off += CHUNK) {
+              const out = await chrome.scripting.executeScript({
+                target: { tabId },
+                world: 'MAIN',
+                func: (keyword, offset, length) =>
+                  typeof window.__dshMsDump === 'function'
+                    ? window.__dshMsDump(keyword, offset, length)
+                    : { ok: false, reason: 'no-hook' },
+                args: ['audio', off, CHUNK]
+              });
+              const got = out?.[0]?.result;
+              if (!got || !got.ok) {
+                if (!parts.length) {
+                  sendResponse({
+                    ok: false,
+                    error:
+                      got?.reason === 'no-track'
+                        ? '没有镜像到音频（页面可能在扩展加载前就建好了播放器，刷新页面再试）'
+                        : '这个页面没有可镜像的播放器数据'
+                  });
+                  return false;
+                }
+                break;
+              }
+              mime = got.mime;
+              total = got.total;
+              if (got.base64) parts.push(got.base64);
+              if (got.offset + got.length >= got.total) break;
+            }
+          } catch (err) {
+            sendResponse({ ok: false, error: `读取镜像数据失败：${String(err?.message || err)}` });
+            return false;
+          }
+
+          const res = await callOffscreenTask({
+            type: 'INGEST_MIRROR',
+            base64: parts.join(''),
+            mime,
+            bytes: total,
+            videoKey: msg.videoKey || '',
+            expectDurationMs: msg.expectDurationMs || 0
+          }).catch((err) => ({ ok: false, error: `后台页面未响应：${String(err?.message || err)}` }));
+
+          if (res?.ok && tabId) {
+            const okInject = await injectSubtitle(tabId);
+            if (msg.videoKey) {
+              chrome.tabs.sendMessage(tabId, { type: 'SET_DOC_KEY', key: msg.videoKey }).catch(() => {});
+            }
+            sendResponse({ ...res, subtitle: okInject });
+          } else {
+            sendResponse(res || { ok: false, error: '没有响应' });
+          }
+          break;
+        }
+
         case 'INSTALL_MEDIA_HOOK': {
           // 挂钩播放器的 playurl 请求，抓当前视频的音轨。
           // 注意用 func 注入：world:'MAIN' + files 在这台 Edge 上静默不生效（实测过）。
