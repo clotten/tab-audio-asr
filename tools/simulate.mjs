@@ -18,7 +18,7 @@ import vm from 'node:vm';
 // 把真实的编解码 / VAD 注入 vm 上下文，这样仿真跑的是真代码而不是桩
 import { encodeWav, mixToMono, mixToMonoInPlace, resampleBox, TARGET_SAMPLE_RATE } from '../lib/wav.js';
 import { coveredRanges, isCovered, coveredSeconds, mergeTimeline } from '../lib/ranges.js';
-import { planFragments } from '../lib/fmp4.js';
+import { planFragments, hasAudioTrack } from '../lib/fmp4.js';
 import { PLATFORMS, hookSpec, cdnRulesFor, allRuleIds, platformForPage, platformForMedia, platformLabel, pickAudioUrl, classifyMediaUrl, mediaUrlFilters } from '../lib/platforms/registry.js';
 import { detectSpeechRegions, createStreamingSegmenter } from '../lib/vad.js';
 import {
@@ -426,7 +426,15 @@ function buildFakeFmp4(fragCount = 4, mdatSize = 512) {
     for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
     return out;
   };
-  const parts = [box('ftyp', 32), box('moov', 256)];
+  // moov 里要带 soun / mp4a 标记：分片路径会先检查初始化段里有没有音轨
+  const moov = box('moov', 256);
+  const tag = (str, at) => {
+    for (let i = 0; i < str.length; i++) moov[at + i] = str.charCodeAt(i);
+  };
+  tag('hdlr', 24);
+  tag('soun', 32);
+  tag('mp4a', 64);
+  const parts = [box('ftyp', 32), moov];
   for (let i = 0; i < fragCount; i++) parts.push(box('moof', 64), box('mdat', mdatSize));
   const total = parts.reduce((n, x) => n + x.length, 0);
   const out = new Uint8Array(total);
@@ -571,6 +579,7 @@ const offscreenCtx = vm.createContext({
   mixToMonoInPlace,
   coveredRanges,
   planFragments,
+  hasAudioTrack,
   hookSpec,
   cdnRulesFor,
   allRuleIds,

@@ -9,7 +9,7 @@
  * 运行：node tools/test-fmp4.mjs
  */
 
-import { isFragmented, initSegmentEnd, fragmentSpans, planFragments, scanTopLevel } from '../lib/fmp4.js';
+import { isFragmented, initSegmentEnd, fragmentSpans, planFragments, scanTopLevel, hasAudioTrack } from '../lib/fmp4.js';
 
 let failed = 0;
 let passed = 0;
@@ -140,6 +140,30 @@ console.log('\n4) 真实 m4s 头部（B 站实测的那 64KB 前 7 个 box）');
   check('切出 1 片', spans.length === 1, String(spans.length));
   check('这一片是 moof(1984)+mdat(194268)', spans[0].end - spans[0].start === 1984 + 194268, String(spans[0].end - spans[0].start));
   check('起点正好跳过 sidx', spans[0].start === 934 + 12008, String(spans[0].start));
+}
+
+console.log('\n5) 初始化段里有没有音轨（防止把视频轨喂给解码器）');
+{
+  const put = (buf, str, at) => {
+    for (let i = 0; i < str.length; i++) buf[at + i] = str.charCodeAt(i);
+  };
+
+  const audioMoov = box('moov', 200);
+  put(audioMoov, 'soun', 20);
+  put(audioMoov, 'mp4a', 60);
+  const audioFile = concat(box('ftyp', 32), audioMoov, box('moof', 64), box('mdat', 256));
+  check('音轨文件 → true', hasAudioTrack(audioFile));
+
+  const videoMoov = box('moov', 200);
+  put(videoMoov, 'vide', 20);
+  put(videoMoov, 'avc1', 60);
+  const videoFile = concat(box('ftyp', 32), videoMoov, box('moof', 64), box('mdat', 256));
+  check('纯视频文件 → false', !hasAudioTrack(videoFile));
+
+  // 抖音的音轨文件是 ftyp+free+mdat+moov（moov 在尾），只看头部会漏
+  const tailMoov = concat(box('ftyp', 32), box('free', 8), box('mdat', 128), audioMoov);
+  check('moov 在尾部也认得出来', hasAudioTrack(tailMoov));
+  check('空数据 → false', !hasAudioTrack(new Uint8Array(0)));
 }
 
 console.log('');
