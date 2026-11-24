@@ -139,8 +139,11 @@ let syntaxBad = 0;
 for (const f of js) {
   const text = readFileSync(f, 'utf8');
   try {
-    // 去掉 ESM 语法后扔进 Function，只为验证可解析
+    // 去掉 ESM 语法后扔进 Function，只为验证可解析。
+    // 注意 export default 不能简单删 export（会留下裸 default 关键字），要换成赋值。
     const stripped = text
+      .replace(/^\s*export\s+default\s+/gm, 'const __default__ = ')
+      .replace(/^\s*export\s+\{[^}]*\}\s*;?\s*$/gm, '')
       .replace(/^\s*export\s+/gm, '')
       .replace(/^\s*import[\s\S]*?from\s+['"][^'"]+['"];?$/gm, '');
     // eslint-disable-next-line no-new-func
