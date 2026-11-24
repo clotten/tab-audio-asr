@@ -845,10 +845,17 @@ async function showPanel() {
     /* 置真失败也不挡注入 */
   }
 
-  const res = await chrome.runtime.sendMessage({ type: 'SHOW_PANEL', tabId: activeTab?.id }).catch((err) => ({
-    ok: false,
-    error: String(err?.message || err)
-  }));
+  const res = await chrome.runtime
+    .sendMessage({
+      type: 'SHOW_PANEL',
+      tabId: activeTab?.id,
+      // 把"这份稿子的 key"一起带过去：抖音这类页面自己算不出同样的 key
+      key: session?.videoKey || ''
+    })
+    .catch((err) => ({
+      ok: false,
+      error: String(err?.message || err)
+    }));
   if (!res?.ok) return note(`显示失败：${res?.error || '这个页面不允许注入'}`, 'err');
   note('已把文字稿显示到页面上。浮窗可拖动、缩放，右上角 × 关闭。', 'ok');
 }

@@ -95,9 +95,23 @@ try {
   const VOLATILE_PARAMS = /^(auth_?key|sign|signature|expires?|e|token|ts|timestamp|t|nonce|rand|utm_\w+|vd_source|from_source|referer)$/i;
   const ID_PARAMS = /^(aid|bvid|vid|video_?id|cid|chapter|chapter_?id|node_?id|course_?id|lesson_?id|id|p)$/i;
 
+  /**
+   * 后台告诉我们的「这份稿子属于哪个视频」。
+   *
+   * 为什么需要：有些页面自己算不出稳定 key（抖音下滑页 URL 只有 ?recommend=1），
+   * 而提取时用的 key 是从媒体地址里取的（douyin:tos-cn-xxx#106s）。
+   * 两边算出来的不一致，浮窗就会认为这是别的视频的稿子，一个字都不显示。
+   */
+  let docKeyHint = null;
+
   function pageVideoKey() {
     const video = findVideo();
     const duration = video && Number.isFinite(video.duration) && video.duration > 0 ? Math.round(video.duration) : null;
+
+    // 后台给过 key，而且还是同一个页面、同一个时长 → 直接用它，别自己算（算出来会对不上）
+    if (docKeyHint && docKeyHint.href === String(location.href) && docKeyHint.duration === duration) {
+      return docKeyHint.key;
+    }
 
     let href = '';
     try {
@@ -1196,6 +1210,16 @@ try {
             reply({ ok: true, rows });
           })();
           return true; // 异步响应
+        }
+
+        if (msg?.type === 'SET_DOC_KEY' && msg.key) {
+          // 后台告诉我们这一页的权威 key（含平台自定义的部分）
+          const v = findVideo();
+          const d = v && Number.isFinite(v.duration) && v.duration > 0 ? Math.round(v.duration) : null;
+          docKeyHint = { key: msg.key, href: String(location.href), duration: d };
+          forced = true;
+          render();
+          return true;
         }
 
         if (msg?.type === 'PAGE_LOG') {

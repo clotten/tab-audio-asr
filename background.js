@@ -647,6 +647,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             tabId = tab?.id;
           }
           const ok = tabId ? await injectSubtitle(tabId) : false;
+          // 带着 key 过去：页面自己算不出同样的 key 时（抖音下滑页），浮窗会当成"别的视频"
+          if (ok && tabId && msg.key) {
+            chrome.tabs.sendMessage(tabId, { type: 'SET_DOC_KEY', key: msg.key }).catch(() => {});
+          }
           sendResponse({ ok, error: ok ? null : '无法在这个页面注入字幕层' });
           break;
         }
@@ -800,6 +804,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // 整段提取不走录制，所以字幕层要在这里补注入，否则页面上一片空白
           if (res?.ok && msg.tabId) {
             const ok = await injectSubtitle(msg.tabId);
+            // 把这次用的 key 告诉内容脚本。
+            // 抖音下滑页的 URL 是 ?recommend=1，页面自己算出来的 key 和提取时用的
+            // （从媒体地址取的 douyin:tos-cn-…）对不上，浮窗会认为"这是别的视频的稿子"，
+            // 结果提取成功但点「显示字幕」什么都不显示（真机踩过）。
+            if (msg.videoKey) {
+              chrome.tabs.sendMessage(msg.tabId, { type: 'SET_DOC_KEY', key: msg.videoKey }).catch(() => {});
+            }
             sendResponse({ ...res, cdnHeaders: cdnApplied, cdnRules, subtitle: ok });
           } else {
             sendResponse({ ...(res || { ok: false, error: '没有响应' }), cdnHeaders: cdnApplied, cdnRules });
