@@ -767,14 +767,16 @@ async function ingestFromPage() {
 
     // 字幕必须按视频隔离：把"这份稿子属于哪个视频"一起传下去，
     // 否则换个视频会照样显示上一个视频的字幕（真实踩过）。
-    const pageUrl = lastProbe?.url || url;
+    // 注意：pageUrl 在上面（判断探测结果是否过期时）已经声明过了，这里直接复用，
+    // 再声明一次会让整个 popup.js 报 SyntaxError、弹窗全变"—"（真踩过）。
+    const keyPageUrl = pageUrl || lastProbe?.url || url;
     const duration = lastProbe?.videos?.find((v) => v.duration)?.duration;
     // 有视频 id 的平台走通用 key；下滑式信息流（抖音）没有 id，用媒体地址里的对象标识，
     // 否则同一页刷到的不同视频会共用一条字幕库记录。
-    const platformKey = mediaKeyFor(url, pageUrl);
+    const platformKey = mediaKeyFor(url, keyPageUrl);
     const videoKey = platformKey
-      ? `${platformForPage(pageUrl)?.id || 'media'}:${platformKey}#${Math.round(duration || 0)}s`
-      : videoKeyOf({ href: pageUrl, duration });
+      ? `${platformForPage(keyPageUrl)?.id || 'media'}:${platformKey}#${Math.round(duration || 0)}s`
+      : videoKeyOf({ href: keyPageUrl, duration });
 
     const res = await chrome.runtime
       .sendMessage({ type: 'INGEST_URL', url, tabId: activeTab?.id, videoKey })
