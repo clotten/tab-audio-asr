@@ -8,6 +8,7 @@
  * 运行：node tools/test-platforms.mjs
  */
 
+import { readFileSync } from 'node:fs';
 import {
   PLATFORMS,
   REQUIRED_FIELDS,
@@ -133,6 +134,22 @@ console.log('\n6) CDN 请求头规则（各平台自己声明）');
   const ids = allRuleIds();
   check('卸载用的 id 列表覆盖两个平台', ids.length >= 2 && ids.includes(9001) && ids.includes(9011), ids.join(','));
   check('id 不重复', new Set(ids).size === ids.length);
+}
+
+console.log('\n7) manifest 权限必须覆盖所有平台的媒体域名');
+{
+  // 观察器靠 webRequest，没有对应 host 权限就收不到那条请求（而且不报错）
+  const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const have = new Set(manifest.host_permissions || []);
+  for (const p of PLATFORMS) {
+    for (const host of p.mediaHosts || []) {
+      check(`${p.id}：manifest 覆盖 ${host}`, have.has(`https://*.${host}/*`), [...have].join(','));
+    }
+  }
+  check('声明了 webRequest 权限', (manifest.permissions || []).includes('webRequest'), (manifest.permissions || []).join(','));
+
+  // 反向检查：适配器里新增域名但忘了同步 manifest 时，上面会红；这里提示怎么修
+  check('媒体域名数量合理（不超过 12 个）', PLATFORMS.reduce((n, x) => n + (x.mediaHosts || []).length, 0) <= 12);
 }
 
 console.log('');
