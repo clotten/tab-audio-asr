@@ -1569,7 +1569,7 @@ function cancelIngest() {
   saveState();
   return { ok: true };
 }
-function startIngest(url, videoKey, maxMinutes = 0) {
+function startIngest(url, videoKey, maxMinutes = 0, expectDurationMs = 0) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http(s) 直链' };
   if (!settings.apiKey) return { ok: false, error: '缺少 API Key' };
@@ -1619,6 +1619,7 @@ function startIngest(url, videoKey, maxMinutes = 0) {
   state.videoKey = videoKey || normalizeVideoUrl(target);
   state.ingestPrior = prevKey && prevKey === state.videoKey ? prevDone : [];
   state.ingestMaxMinutes = Number.isFinite(maxMinutes) && maxMinutes > 0 ? Math.min(600, Math.round(maxMinutes)) : 0;
+  state.expectDurationMs = Number.isFinite(expectDurationMs) && expectDurationMs > 0 ? expectDurationMs : 0;
   state.diag.ingestUrl = target.slice(0, 300);
   saveState();
 
@@ -1781,6 +1782,22 @@ async function transcribeWholeFile(buf, prior, myToken) {
   await closeCtx(ctx);
   state.diag.ingestPcmMB = Math.round((samples.length * 4) / 1048576);
   state.diag.ingestDurationMs = durationMs;
+
+  // 核对"下载到的音频是不是当前这条视频"。
+  // 抖音下滑页会把别的视频的音轨也预加载，抓错时下载下来的时长完全对不上
+  // （实测：95 秒的视频抓到了 645 秒的音轨），转完才发现白花钱。
+  const expect = state.expectDurationMs || 0;
+  if (expect > 8000) {
+    const diff = Math.abs(durationMs - expect);
+    state.diag.ingestDurationDiffMs = diff;
+    if (diff > Math.max(5000, expect * 0.15)) {
+      throw new Error(
+        `抓到的音轨不是当前这条视频：下载音频 ${Math.round(durationMs / 1000)} 秒，` +
+          `页面视频 ${Math.round(expect / 1000)} 秒。下滑式信息流会把别的视频预加载进来，` +
+          `点「探测本页媒体」重挑一次；实在抓不准就用「实时转录」。`
+      );
+    }
+  }
 
   const maxSec = (state.ingestMaxMinutes || 0) * 60;
   const usable = maxSec && samples.length > maxSec * TARGET_RATE
@@ -2354,7 +2371,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
         case 'INGEST_URL':
           // 直链整段提取：立刻返回，进度靠 state.diag 推给弹窗
-          sendResponse(startIngest(msg.url, msg.videoKey, msg.maxMinutes || 0));
+          sendResponse(startIngest(msg.url, msg.videoKey, msg.maxMinutes || 0, msg.expectDurationMs || 0));
           break;
 
         case 'VAD_SELFTEST':

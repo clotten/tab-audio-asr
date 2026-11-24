@@ -787,7 +787,15 @@ async function ingestFromPage() {
       : videoKeyOf({ href: keyPageUrl, duration });
 
     const res = await chrome.runtime
-      .sendMessage({ type: 'INGEST_URL', url, tabId: activeTab?.id, videoKey })
+      .sendMessage({
+      type: 'INGEST_URL',
+      url,
+      tabId: activeTab?.id,
+      videoKey,
+      // 期望时长：用来在下载后核对"抓到的是不是当前这条视频"。
+      // 抖音下滑页会把别的视频的音轨也预加载，抓错时下载下来的时长会对不上。
+      expectDurationMs: Math.round((duration || 0) * 1000)
+    })
       .catch((err) => ({
         ok: false,
         error: String(err?.message || err)
