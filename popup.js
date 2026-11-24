@@ -1086,10 +1086,32 @@ async function resolveMediaUrl(report) {
     if (obs?.ok && Array.isArray(obs.items) && obs.items.length) {
       report.observed = obs.items.slice(0, 6).map((x) => x.kind + ':' + String(x.url).slice(0, 60));
       const pageUrl = activeTab?.url || '';
+
+      // 下滑式信息流会复用一个 <video>，上一条视频的音轨常常还留在观察记录里。
+      // 问内容脚本"当前这条视频从什么时候开始播"，只保留那之后的请求。
+      let genAt = 0;
+      let genDuration = null;
+      try {
+        const gen = await chrome.tabs.sendMessage(activeTab?.id ?? 0, { type: 'MEDIA_GEN' });
+        if (gen?.ok) {
+          genAt = Number(gen.at) || 0;
+          genDuration = gen.duration;
+          report.mediaGen = { at: genAt, duration: genDuration };
+        }
+      } catch {
+        /* 没有内容脚本就用全部 */
+      }
+
+      const fresh = genAt ? obs.items.filter((x) => Number(x.at) >= genAt - 1500) : obs.items;
+      report.observedFresh = fresh.length;
+      // 当前视频一条都没有（音轨还在缓冲）：不要退回上一条，宁可让用户等一等
+      const pool = fresh.length ? fresh : obs.items.filter((x) => !genAt);
+      if (fresh.length) report.mediaGenMatched = true;
+
       // 只挑"明确是音轨"和"分不出来的"；**明确是视频轨的绝不退回**
       // （抖音把音视频拆成两个 URL，退回视频轨只会解出一堆解不开的片段，真机踩过）
-      const audioUrls = obs.items.filter((x) => x.kind === 'audio').map((x) => x.url);
-      const unknownUrls = obs.items.filter((x) => x.kind === 'unknown').map((x) => x.url);
+      const audioUrls = pool.filter((x) => x.kind === 'audio').map((x) => x.url);
+      const unknownUrls = pool.filter((x) => x.kind === 'unknown').map((x) => x.url);
       const chosen =
         pickAudioUrl(audioUrls, { pageUrl }) || pickAudioUrl(unknownUrls, { pageUrl });
       if (chosen) {

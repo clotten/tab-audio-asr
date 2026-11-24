@@ -17,10 +17,10 @@
 
 // 版本戳：控制台一眼看出页面里跑的是哪一版内容脚本（排查"改了没生效"）
 try {
-  console.log('[字幕助手·页面] 内容脚本已加载 v2026-11-24b');
+  console.log('[字幕助手·页面] 内容脚本已加载 v2026-11-24c');
   // 同时写进 DOM：自动化/远程排查时不用开控制台就能确认页面跑的是哪一版
   try {
-    document.documentElement.dataset.dshAsrVersion = '2026-11-24b';
+    document.documentElement.dataset.dshAsrVersion = '2026-11-24c';
   } catch {}
 } catch {}
 
@@ -202,6 +202,49 @@ try {
       if (!best || (v.duration || 0) > (best.duration || 0)) best = v;
     }
     return best;
+  }
+
+  /**
+   * 「当前这条视频是什么时候开始播的」。
+   *
+   * 为什么需要：抖音这类下滑式信息流复用一个 <video>，换视频只是换 src，
+   * 而且音轨常常提前缓冲。后台观察到的媒体请求里既有上一条也有当前这条，
+   * 只看"最近一条"就会拿错（实测：探测出来是上一个视频）。
+   * 记下 src 变化的时间，让后台按"这个时间之后发出的请求"筛选。
+   */
+  let mediaGenAt = 0;
+  let mediaGenSrc = '';
+
+  function markMediaGeneration() {
+    const v = findVideo();
+    if (!v) return;
+    const src = String(v.currentSrc || v.src || '');
+    if (src && src !== mediaGenSrc) {
+      mediaGenSrc = src;
+      mediaGenAt = Date.now();
+    }
+  }
+
+  function watchMediaGeneration() {
+    // 事件 + 轮询兜底：换源不一定触发 loadedmetadata（MSE 常常直接换 blob）
+    try {
+      const v = findVideo();
+      if (v) {
+        v.addEventListener('loadedmetadata', markMediaGeneration, true);
+        v.addEventListener('loadeddata', markMediaGeneration, true);
+      }
+    } catch {
+      /* ignore */
+    }
+    const timer = setInterval(() => {
+      try {
+        markMediaGeneration();
+      } catch {
+        /* ignore */
+      }
+    }, 800);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    markMediaGeneration();
   }
 
   function sampleTick() {
@@ -1212,6 +1255,19 @@ try {
           return true; // 异步响应
         }
 
+        if (msg?.type === 'MEDIA_GEN') {
+          // 告诉弹窗：当前这条视频是什么时候开始播的（用于过滤"上一条视频"的请求）
+          const v = findVideo();
+          reply({
+            ok: true,
+            at: mediaGenAt,
+            src: mediaGenSrc.slice(0, 60),
+            duration: v && Number.isFinite(v.duration) ? Math.round(v.duration) : null,
+            currentTime: v ? Math.round(v.currentTime * 10) / 10 : null
+          });
+          return true;
+        }
+
         if (msg?.type === 'SET_DOC_KEY' && msg.key) {
           // 后台告诉我们这一页的权威 key（含平台自定义的部分）
           const v = findVideo();
@@ -1260,6 +1316,7 @@ try {
     build();
     listen();
     listenShowForce();
+    watchMediaGeneration();
     load();
   } catch (err) {
     // 某些沙箱 iframe 里不允许嵌入，不影响录制；但打条日志，出问题时好排查
