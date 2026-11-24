@@ -17,10 +17,10 @@
 
 // 版本戳：控制台一眼看出页面里跑的是哪一版内容脚本（排查"改了没生效"）
 try {
-  console.log('[字幕助手·页面] 内容脚本已加载 v2026-11-24d');
+  console.log('[字幕助手·页面] 内容脚本已加载 v2026-11-24e');
   // 同时写进 DOM：自动化/远程排查时不用开控制台就能确认页面跑的是哪一版
   try {
-    document.documentElement.dataset.dshAsrVersion = '2026-11-24d';
+    document.documentElement.dataset.dshAsrVersion = '2026-11-24e';
   } catch {}
 } catch {}
 
@@ -194,12 +194,45 @@ try {
   const NOT_MAPPABLE = -1;
   let mappedForSession = null;
 
+  /**
+   * 找出「用户正在看的那条视频」。
+   *
+   * 踩过的坑：抖音搜索页/下滑页同时存在 7 个 <video>（预告片、推荐位、当前视频…），
+   * 原来按「时长最长」挑，结果挑中了 644 秒的预告片，而用户看的是 30 秒那条：
+   *   - 浮窗按 645 秒算 key，和提取用的 30 秒 key 对不上 → 提取成功但浮窗空白；
+   *   - 探测报的时长也是 645 秒 → 抓错音轨。
+   *
+   * 现在的排序依据（分高者胜）：
+   *   正在播放 +100 ＞ 在视口里 +50 ＞ 有画面数据 +10 ＞ 时长大致兜底
+   */
   function findVideo() {
+    const list = [...document.querySelectorAll('video')];
     let best = null;
-    const list = document.querySelectorAll('video');
+    let bestScore = -Infinity;
+
     for (const v of list) {
       if (!v || !Number.isFinite(v.currentTime)) continue;
-      if (!best || (v.duration || 0) > (best.duration || 0)) best = v;
+
+      let score = 0;
+      if (!v.paused && !v.ended) score += 100;
+      try {
+        const r = v.getBoundingClientRect();
+        const visible = r.width > 40 && r.height > 40 && r.bottom > 0 && r.top < (window.innerHeight || 1e9);
+        if (visible) score += 50;
+        // 视口中心附近再加一点，压过同屏的其它推荐位
+        const cy = r.top + r.height / 2;
+        const mid = (window.innerHeight || 0) / 2;
+        if (visible && Math.abs(cy - mid) < (window.innerHeight || 0) * 0.35) score += 15;
+      } catch {
+        /* ignore */
+      }
+      if (v.readyState >= 2) score += 10;
+      if (Number.isFinite(v.duration) && v.duration > 0) score += Math.min(5, v.duration / 120);
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = v;
+      }
     }
     return best;
   }

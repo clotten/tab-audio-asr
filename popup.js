@@ -752,7 +752,7 @@ async function ingestFromPage() {
     mlog('整段提取 · 即将下载ID=' + mediaId(url) + ' · 完整地址=' + url);
 
     // 花钱前给个明白账：长视频分段多，误点一次挺贵的（真金白银踩过）
-    const durSec = Math.round(lastProbe?.videos?.find((v) => v.duration)?.duration || 0);
+    const durSec = Math.round(lastProbe?.currentVideo?.duration || lastProbe?.videos?.find((v) => v.duration)?.duration || 0);
     const estReqs = durSec ? Math.ceil(durSec / 20) : 0;
     if (durSec > 600 && !confirmBigRun) {
       confirmBigRun = true;
@@ -778,7 +778,7 @@ async function ingestFromPage() {
     // 注意：pageUrl 在上面（判断探测结果是否过期时）已经声明过了，这里直接复用，
     // 再声明一次会让整个 popup.js 报 SyntaxError、弹窗全变"—"（真踩过）。
     const keyPageUrl = pageUrl || lastProbe?.url || url;
-    const duration = lastProbe?.videos?.find((v) => v.duration)?.duration;
+    const duration = lastProbe?.currentVideo?.duration || lastProbe?.videos?.find((v) => v.duration)?.duration;
     // 有视频 id 的平台走通用 key；下滑式信息流（抖音）没有 id，用媒体地址里的对象标识，
     // 否则同一页刷到的不同视频会共用一条字幕库记录。
     const platformKey = mediaKeyFor(url, keyPageUrl);

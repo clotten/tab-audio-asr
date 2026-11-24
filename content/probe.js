@@ -99,13 +99,23 @@
   // ② <video> / <audio> 元素
   for (const el of document.querySelectorAll('video,audio')) {
     const src = el.currentSrc || el.src || '';
+    let visible = false;
+    try {
+      const r = el.getBoundingClientRect();
+      visible = r.width > 40 && r.height > 40 && r.bottom > 0 && r.top < (window.innerHeight || 1e9);
+    } catch {
+      /* ignore */
+    }
     out.videos.push({
       tag: el.tagName.toLowerCase(),
       src,
       sources: [...el.querySelectorAll('source')].map((s) => s.src).filter(Boolean),
       duration: Number.isFinite(el.duration) ? Math.round(el.duration) : null,
       readyState: el.readyState,
-      hasMSE: !!el.srcObject || lower(src).startsWith('blob:')
+      hasMSE: !!el.srcObject || lower(src).startsWith('blob:'),
+      // 一个页面可能有好几个 video（搜索页/推荐位/预告片），下面按这两个字段挑"用户正在看的那条"
+      playing: !el.paused && !el.ended,
+      visible
     });
   }
 
@@ -116,7 +126,13 @@
   }
 
   // ④ 判定：哪条路走得通
-  const video = out.videos.find((v) => v.hasMSE) || out.videos[0] || null;
+  // 挑「用户正在看的那条」：正在播 + 在视口里最可信；都没有再退回 MSE/第一个。
+  // 之前用的是 out.videos.find(hasMSE)，多视频页面会挑到预告片（真机踩过）。
+  const playingVisible = out.videos.find((v) => v.playing && v.visible);
+  const playing = out.videos.find((v) => v.playing);
+  const video = playingVisible || playing || out.videos.find((v) => v.hasMSE) || out.videos[0] || null;
+  // 单独暴露出去，弹窗算 key / 核对时长都用它，别再各自猜一遍
+  out.currentVideo = video;
   const directSrc =
     (video && /^https?:/i.test(video.src || '') ? video.src : '') ||
     (video && (video.sources || []).find((s) => /^https?:/i.test(s))) ||
