@@ -46,6 +46,8 @@
 
 ## 已知边界
 
+- **支持整段提取的平台**：B 站（读播放接口取音频轨）、抖音（用 webRequest 观察 media-audio DASH 轨并补 Referer）。
+  其它网站只要有直链 mp4/m4a 也能整段提取；新增平台见 `lib/platforms/`（一个平台一个文件）
 - **不支持**：Netflix 等 DRM 保护的站点；纯 blob: 且没有可读播放接口的站点无法整段提取
 - **实时延迟**：默认 12 秒一批（准确率优先）；想低延迟可把 `lib/vad.js` 里的
   `softCutMs / hardCutMs` 调回 6000 / 10000

@@ -12,6 +12,18 @@
 
 import { buildDoc, getDoc, upsertDoc, listDocs, removeDoc, sanitizeDocs } from './lib/docstore.js';
 import { pageHook } from './lib/page-hook.js';
+import {
+  PLATFORMS,
+  hookSpec,
+  cdnRulesFor,
+  allRuleIds,
+  platformForPage,
+  platformForMedia,
+  platformLabel,
+  pickAudioUrl,
+  classifyMediaUrl,
+  mediaUrlFilters
+} from './lib/platforms/registry.js';
 
 // 频道里给上面几个起短名，避免和消息分支里的局部变量重名
 const docUpsert = upsertDoc;
@@ -299,11 +311,8 @@ async function resetSession() {
  * 规则是**会话级**的（updateSessionRules，浏览器关掉就没了），
  * 只在整段提取期间装、结束后卸，不长期改用户的请求。
  */
-const CDN_RULES = [
-  // B 站：音频/视频都在 bilivideo.com，Referer 必须是 bilibili.com
-  { id: 9001, filter: '||bilivideo.com', referer: 'https://www.bilibili.com/', origin: 'https://www.bilibili.com' },
-  { id: 9002, filter: '||hdslb.com', referer: 'https://www.bilibili.com/', origin: 'https://www.bilibili.com' }
-];
+// 具体规则由 lib/platforms/*.js 声明，这里不再硬编码任何平台。
+// 新增平台时主流程一行都不用改。
 
 /** 给这个 URL 装对应的请求头规则（返回是否装了） */
 async function applyCdnHeaders(url) {
@@ -314,29 +323,13 @@ async function applyCdnHeaders(url) {
     return false;
   }
 
-  const hit = CDN_RULES.find((r) => host.endsWith(r.filter.replace('||', '')));
-  if (!hit) return false;
+  const { rules } = cdnRulesFor(url);
+  if (!rules.length) return false;
 
   try {
     await chrome.declarativeNetRequest.updateSessionRules({
-      removeRuleIds: [hit.id],
-      addRules: [
-        {
-          id: hit.id,
-          priority: 1,
-          action: {
-            type: 'modifyHeaders',
-            requestHeaders: [
-              { header: 'referer', operation: 'set', value: hit.referer },
-              { header: 'origin', operation: 'set', value: hit.origin }
-            ]
-          },
-          condition: {
-            urlFilter: hit.filter,
-            resourceTypes: ['xmlhttprequest', 'media', 'other']
-          }
-        }
-      ]
+      removeRuleIds: rules.map((r) => r.id),
+      addRules: rules
     });
     return true;
   } catch {
@@ -348,12 +341,51 @@ async function applyCdnHeaders(url) {
 async function clearCdnHeaders() {
   try {
     await chrome.declarativeNetRequest.updateSessionRules({
-      removeRuleIds: CDN_RULES.map((r) => r.id)
+      removeRuleIds: allRuleIds()
     });
   } catch {
     /* 没权限/没规则都无所谓 */
   }
 }
+
+/* ------------------------------ 媒体请求观察 ------------------------------ */
+
+/**
+ * 有些平台（抖音就是）的音轨地址**不出现在页面 DOM、也不出现在任何 JSON 里**：
+ * 播放器走 MSE，直接去 CDN 拉 media-audio / media-video 分片。
+ * 这种情况下唯一可靠的信号就是「它真的发了这条请求」。
+ *
+ * MV3 不允许拦截 webRequest，但允许**观察**，正好够用：
+ * 记下每个标签页最近发过的媒体 URL，弹窗要提取时来问。
+ */
+const OBSERVED_LIMIT = 24;
+const observedByTab = new Map(); // tabId -> [{ url, kind, platformId, at }]
+
+try {
+  chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+      if (!details || details.tabId < 0) return;
+      const info = classifyMediaUrl(details.url);
+      if (!info.platform) return;
+      const list = observedByTab.get(details.tabId) || [];
+      if (list.some((x) => x.url === details.url)) return;
+      list.push({
+        url: details.url,
+        kind: info.kind,
+        platformId: info.platform.id,
+        at: Date.now()
+      });
+      while (list.length > OBSERVED_LIMIT) list.shift();
+      observedByTab.set(details.tabId, list);
+    },
+    { urls: mediaUrlFilters() }
+  );
+} catch (err) {
+  // 没有 webRequest 权限时不要影响其它功能
+  console.warn('[观察器] 启动失败', err);
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => observedByTab.delete(tabId));
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // 发给 offscreen 的消息不要在这里处理，否则两个上下文会抢着回包
@@ -376,6 +408,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
 
 
+        case 'OBSERVED_MEDIA': {
+          // 弹窗来问：这个标签页最近实际请求过哪些媒体？
+          let tabId = msg.tabId;
+          if (!tabId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            tabId = tab?.id;
+          }
+          const list = (tabId && observedByTab.get(tabId)) || [];
+          sendResponse({ ok: true, items: list.slice(-12).reverse() });
+          break;
+        }
+
         case 'INSTALL_MEDIA_HOOK': {
           // 挂钩播放器的 playurl 请求，抓当前视频的音轨。
           // 注意用 func 注入：world:'MAIN' + files 在这台 Edge 上静默不生效（实测过）。
@@ -386,7 +430,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }
           if (!tabId) { sendResponse({ ok: false, error: '没有活动标签页' }); break; }
           try {
-            const out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageHook });
+            // 钩子是平台无关的：监听哪些请求、靠什么关键词分类音轨，都由注册表算好传进去
+            const spec = hookSpec();
+            const out = await chrome.scripting.executeScript({
+              target: { tabId },
+              world: 'MAIN',
+              func: pageHook,
+              args: [spec]
+            });
             sendResponse({ ok: true, state: out?.[0]?.result || '' });
           } catch (err) {
             sendResponse({ ok: false, error: String(err?.message || err) });

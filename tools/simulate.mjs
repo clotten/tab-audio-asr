@@ -19,6 +19,7 @@ import vm from 'node:vm';
 import { encodeWav, mixToMono, mixToMonoInPlace, resampleBox, TARGET_SAMPLE_RATE } from '../lib/wav.js';
 import { coveredRanges, isCovered, coveredSeconds, mergeTimeline } from '../lib/ranges.js';
 import { planFragments } from '../lib/fmp4.js';
+import { PLATFORMS, hookSpec, cdnRulesFor, allRuleIds, platformForPage, platformForMedia, platformLabel, pickAudioUrl, classifyMediaUrl, mediaUrlFilters } from '../lib/platforms/registry.js';
 import { detectSpeechRegions, createStreamingSegmenter } from '../lib/vad.js';
 import {
   DEFAULT_GLOSSARY_TEXT,
@@ -143,7 +144,12 @@ const swChrome = {
   tabs: {
     get: async (id) => ({ id, url: 'https://www.bilibili.com/video/BV1test', title: '测试视频：小狗', audible: true }),
     query: async () => [],
-    onUpdated: { addListener: (fn) => (bus.onUpdated = fn) }
+    onUpdated: { addListener: (fn) => (bus.onUpdated = fn) },
+    onRemoved: { addListener: (fn) => (bus.onRemoved = fn) }
+  },
+  // 后台用 webRequest 观察媒体请求（MV3 只允许观察）：桩里只记下来，不做事
+  webRequest: {
+    onBeforeRequest: { addListener: (fn, filter) => (bus.webRequestListener = fn, bus.webRequestFilter = filter) }
   },
   tabCapture: {
     getMediaStreamId: async () => 'stream-123'
@@ -565,6 +571,15 @@ const offscreenCtx = vm.createContext({
   mixToMonoInPlace,
   coveredRanges,
   planFragments,
+  hookSpec,
+  cdnRulesFor,
+  allRuleIds,
+  platformForPage,
+  platformForMedia,
+  platformLabel,
+  pickAudioUrl,
+  classifyMediaUrl,
+  mediaUrlFilters,
   isCovered,
   coveredSeconds,
   mergeTimeline,
@@ -609,6 +624,17 @@ const swCtx = vm.createContext({
   listDocs,
   removeDoc,
   sanitizeDocs,
+  // 平台注册表（后台用它生成 DNR 规则、分类观察到的媒体请求）
+  hookSpec,
+  cdnRulesFor,
+  allRuleIds,
+  platformForPage,
+  platformForMedia,
+  platformLabel,
+  pickAudioUrl,
+  classifyMediaUrl,
+  mediaUrlFilters,
+  PLATFORMS,
   chrome: swChrome,
   console,
   setTimeout,

@@ -7,6 +7,7 @@ import { makeToneWav } from './lib/wav.js';
 import { GLOSSARY_FORMAT_HINT } from './lib/glossary.js';
 import { videoKeyOf } from './lib/videokey.js';
 import { readAudioFile, removeAudioFile } from './lib/audiofile.js';
+import { platformForPage, pickAudioUrl } from './lib/platforms/registry.js';
 
 const DEFAULTS = {
   apiKey: '',
@@ -1038,25 +1039,54 @@ function scoreCandidates(rows) {
 async function resolveMediaUrl(report) {
   if (!report) return '';
 
-  // ① B 站：现查播放接口，拿"当前这个视频"的音轨。
-  //    （__playinfo__ / __INITIAL_STATE__ 都是首屏快照，SPA 换集后不更新，会转到旧视频）
-  try {
-    const bili = await chrome.tabs.sendMessage(activeTab?.id ?? 0, { type: 'BILI_AUDIO' });
-    if (bili?.ok && bili.audio) {
-      report.picked = { url: bili.audio, type: 'bilibili-api', size: 0, score: 999 };
-      report.biliCid = bili.cid;
-      return bili.audio;
+  // ① 有些平台能在页面里现查当前视频的音轨（B 站：BV → cid → 播放接口）。
+  //    具体用哪种解析由平台适配器声明（pageResolver），这里不出现任何平台名。
+  const plat = platformForPage(activeTab?.url || report.href || '');
+  report.platformId = plat?.id || '';
+  if (plat?.pageResolver) {
+    try {
+      const res = await chrome.tabs.sendMessage(activeTab?.id ?? 0, { type: plat.pageResolver });
+      if (res?.ok && res.audio) {
+        report.picked = { url: res.audio, type: plat.id + '-api', size: 0, score: 999 };
+        report.platformCid = res.cid;
+        return res.audio;
+      }
+      if (res && res.ok === false) report.platformError = res.error || '未知';
+    } catch {
+      /* 内容脚本没注入或平台解析不可用，继续走通用路径 */
     }
-    if (bili && bili.ok === false) report.biliError = bili.error || "未知";
-  } catch {
-    /* 不是 B 站或内容脚本没注入，继续走通用路径 */
   }
 
   // ① 钩子抓到的是"当前视频那一次 playurl"里的音轨，最可信
+  // ①.5 后台观察到的、真实请求过的媒体地址。
+  //     抖音这类播放器不把音轨写进 DOM 或 JSON，只有这条能拿到。
+  try {
+    const obs = await chrome.runtime.sendMessage({ type: 'OBSERVED_MEDIA', tabId: activeTab?.id });
+    if (obs?.ok && Array.isArray(obs.items) && obs.items.length) {
+      report.observed = obs.items.slice(0, 6).map((x) => x.kind + ':' + String(x.url).slice(0, 60));
+      const audioUrls = obs.items.filter((x) => x.kind === 'audio').map((x) => x.url);
+      const anyUrls = obs.items.map((x) => x.url);
+      const chosen =
+        pickAudioUrl(audioUrls, { pageUrl: activeTab?.url || '' }) ||
+        pickAudioUrl(anyUrls, { pageUrl: activeTab?.url || '' });
+      if (chosen) {
+        report.picked = { url: chosen, type: 'observed', size: 0, score: 999 };
+        return chosen;
+      }
+    }
+  } catch {
+    /* 没有 webRequest 权限或后台没起来，继续走钩子 */
+  }
+
   const hooked = report.playinfo;
-  if (hooked && hooked.audio && !hooked.stale && String(hooked.source || '').startsWith('hook')) {
-    report.picked = { url: hooked.audio, type: 'hook:' + hooked.source, size: 0, score: 999 };
-    return hooked.audio;
+  if (hooked && !hooked.stale && String(hooked.source || '').startsWith('hook')) {
+    // 钩子给出的是这一批候选 URL，具体挑哪条由平台适配器决定
+    const fromList = pickAudioUrl(hooked.list || [hooked.audio], { pageUrl: activeTab?.url || '' });
+    const chosen = fromList || hooked.audio;
+    if (chosen) {
+      report.picked = { url: chosen, type: 'hook:' + hooked.source, size: 0, score: 999 };
+      return chosen;
+    }
   }
 
   const segments = (report.media?.segment || []).map((s) => s.url || '').filter((u) => /^https?:/i.test(u));

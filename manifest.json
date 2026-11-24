@@ -13,7 +13,8 @@
                         "storage",
                         "scripting",
                         "activeTab",
-                        "declarativeNetRequest"
+                        "declarativeNetRequest",
+    "webRequest"
                     ],
     "host_permissions":  [
                              "https://api.siliconflow.cn/*"
