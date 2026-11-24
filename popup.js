@@ -739,7 +739,15 @@ async function ingestFromPage() {
     }
 
     const url = lastMediaUrl;
-    if (!url) return note('这个页面没挑出可用的音轨地址：先点播放几秒让播放器真的去取流，再点「探测本页媒体」。', 'err');
+    if (!url) {
+      return note(
+        lastProbe?.onlyVideo
+          ? '只抓到了视频轨（抖音的音轨是单独的地址）。请先播放 3-5 秒，再点「探测本页媒体」；' +
+            '如果还是只有视频轨，把这句告诉我，我加一条按页面接口取音轨的路。'
+          : '这个页面没挑出可用的音轨地址：先点播放几秒让播放器真的去取流，再点「探测本页媒体」。',
+        'err'
+      );
+    }
 
     mlog('整段提取 · 即将下载ID=' + mediaId(url) + ' · 完整地址=' + url);
 
@@ -1070,14 +1078,20 @@ async function resolveMediaUrl(report) {
     const obs = await chrome.runtime.sendMessage({ type: 'OBSERVED_MEDIA', tabId: activeTab?.id });
     if (obs?.ok && Array.isArray(obs.items) && obs.items.length) {
       report.observed = obs.items.slice(0, 6).map((x) => x.kind + ':' + String(x.url).slice(0, 60));
+      const pageUrl = activeTab?.url || '';
+      // 只挑"明确是音轨"和"分不出来的"；**明确是视频轨的绝不退回**
+      // （抖音把音视频拆成两个 URL，退回视频轨只会解出一堆解不开的片段，真机踩过）
       const audioUrls = obs.items.filter((x) => x.kind === 'audio').map((x) => x.url);
-      const anyUrls = obs.items.map((x) => x.url);
+      const unknownUrls = obs.items.filter((x) => x.kind === 'unknown').map((x) => x.url);
       const chosen =
-        pickAudioUrl(audioUrls, { pageUrl: activeTab?.url || '' }) ||
-        pickAudioUrl(anyUrls, { pageUrl: activeTab?.url || '' });
+        pickAudioUrl(audioUrls, { pageUrl }) || pickAudioUrl(unknownUrls, { pageUrl });
       if (chosen) {
         report.picked = { url: chosen, type: 'observed', size: 0, score: 999 };
         return chosen;
+      }
+      // 只观察到视频轨：说清楚该怎么办，别让用户以为"整段都是音乐"
+      if (obs.items.some((x) => x.kind === 'video')) {
+        report.onlyVideo = true;
       }
     }
   } catch {

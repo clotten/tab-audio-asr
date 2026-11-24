@@ -14,7 +14,7 @@
 
 import { encodeWav, mixToMono, mixToMonoInPlace, resampleBox, TARGET_SAMPLE_RATE } from './lib/wav.js';
 import { coveredRanges, isCovered, coveredSeconds, mergeTimeline } from './lib/ranges.js';
-import { planFragments } from './lib/fmp4.js';
+import { planFragments, hasAudioTrack } from './lib/fmp4.js';
 import { createWavWriter, readAudioFile } from './lib/audiofile.js';
 import { looksLikeHallucination } from './lib/hallucination.js';
 import { createSileroVad, createSileroGate } from './lib/silero.js';
@@ -1662,6 +1662,15 @@ function closeCtx(ctx) {
 async function transcribeFragments(buf, plan, prior, myToken) {
   const bytes = new Uint8Array(buf);
   const init = bytes.slice(0, plan.initEnd);
+
+  // 这条地址里没有音轨就别硬解。抖音的音轨和视频轨是两个 URL，抓到 media-video 时
+  // 解码会报 Unable to decode audio data，最后却显示「整段都是音乐」，误导性很强。
+  if (!hasAudioTrack(init)) {
+    throw new Error(
+      '这条地址里没有音轨（抓到的是纯视频轨）。请先播放几秒，让播放器去取 media-audio 那条，' +
+        '再点「探测本页媒体」确认选中的是音轨再提取。'
+    );
+  }
   const Ctx = decodeCtor();
   let ctx = new Ctx(1, 1, INGEST_DECODE_RATE);
   const total = plan.spans.length;
