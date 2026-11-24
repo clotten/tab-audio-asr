@@ -7,7 +7,7 @@ import { makeToneWav } from './lib/wav.js';
 import { GLOSSARY_FORMAT_HINT } from './lib/glossary.js';
 import { videoKeyOf } from './lib/videokey.js';
 import { readAudioFile, removeAudioFile } from './lib/audiofile.js';
-import { platformForPage, pickAudioUrl } from './lib/platforms/registry.js';
+import { platformForPage, pickAudioUrl, mediaKeyFor } from './lib/platforms/registry.js';
 
 const DEFAULTS = {
   apiKey: '',
@@ -767,10 +767,14 @@ async function ingestFromPage() {
 
     // 字幕必须按视频隔离：把"这份稿子属于哪个视频"一起传下去，
     // 否则换个视频会照样显示上一个视频的字幕（真实踩过）。
-    const videoKey = videoKeyOf({
-      href: lastProbe?.url || url,
-      duration: lastProbe?.videos?.find((v) => v.duration)?.duration
-    });
+    const pageUrl = lastProbe?.url || url;
+    const duration = lastProbe?.videos?.find((v) => v.duration)?.duration;
+    // 有视频 id 的平台走通用 key；下滑式信息流（抖音）没有 id，用媒体地址里的对象标识，
+    // 否则同一页刷到的不同视频会共用一条字幕库记录。
+    const platformKey = mediaKeyFor(url, pageUrl);
+    const videoKey = platformKey
+      ? `${platformForPage(pageUrl)?.id || 'media'}:${platformKey}#${Math.round(duration || 0)}s`
+      : videoKeyOf({ href: pageUrl, duration });
 
     const res = await chrome.runtime
       .sendMessage({ type: 'INGEST_URL', url, tabId: activeTab?.id, videoKey })
